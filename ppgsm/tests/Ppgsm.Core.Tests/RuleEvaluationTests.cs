@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Ppgsm.Core.Domain;
 
 namespace Ppgsm.Core.Tests;
@@ -12,8 +13,9 @@ public sealed class RuleEvaluationTests
     public async Task Every_acceptance_fixture_executes_through_the_real_evaluator_runtime()
     {
         var root = Path.Combine(AppContext.BaseDirectory, "rules", "v1");
+        var digest = WriteManifest(Path.Combine(root, "catalog.yaml"), Path.Combine(root, "default-profile.yaml"));
         var published = await new FilePublishedRuleCatalog(
-            Path.Combine(root, "catalog.yaml"), Path.Combine(root, "default-profile.yaml"), Version, Attestation)
+            Path.Combine(root, "catalog.yaml"), Path.Combine(root, "default-profile.yaml"), Version, digest)
             .GetCurrentAsync(CancellationToken.None);
         Assert.NotNull(published);
         using var fixtures = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "fixtures", "acceptance-cases.yaml")));
@@ -71,6 +73,59 @@ public sealed class RuleEvaluationTests
         Assert.Equal(SectionKeys.DlpPolicies, SectionKeys.Canonicalize("dlp"));
         Assert.Contains(SectionKeys.DlpPolicies, SectionKeys.Canonical);
         Assert.DoesNotContain("dlp", SectionKeys.Canonical);
+    }
+
+    [Fact]
+    public void Poc_approval_requires_exact_tenant_rule_identity_api_version_and_is_inactive_at_expiry()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T12:00:00Z");
+        var customerId = Guid.NewGuid();
+        var approval = new PocApproval(Guid.NewGuid(), customerId, "PPG-DLP-002", "delegated:reader", "2026-04-01",
+            Guid.NewGuid(), "external-approver", now.AddHours(-1), now.AddHours(1));
+
+        Assert.True(approval.Matches(customerId, "PPG-DLP-002", "delegated:reader", "2026-04-01", now));
+        Assert.False(approval.Matches(Guid.NewGuid(), "PPG-DLP-002", "delegated:reader", "2026-04-01", now));
+        Assert.False(approval.Matches(customerId, "PPG-DLP-002", "app-only:reader", "2026-04-01", now));
+        Assert.False(approval.Matches(customerId, "PPG-DLP-002", "delegated:reader", "2025-01-01", now));
+        Assert.False(approval.Matches(customerId, "PPG-DLP-002", "delegated:reader", "2026-04-01", approval.ExpiresAt));
+    }
+
+    [Theory]
+    [InlineData("disabled", "always", "default")]
+    [InlineData("enabled", "resource-present", "apps")]
+    public void Profile_and_resource_absence_are_not_applicable(string profileMode, string applicabilityMode, string profileKey)
+    {
+        using var parameters = JsonDocument.Parse("{}");
+        var rule = new RuleDefinition("PPG-ENV-999", 1, "Applicability", "Environments", FindingSeverity.Medium, 1m,
+            new(applicabilityMode, profileKey), new("dlp.coverage", 1, parameters.RootElement.Clone()), 1,
+            [new(SectionKeys.Environments, "Full", "Documented", ["environments[*].id"])], "Rationale", "Recommendation",
+            new(false, null, false, "Review"), new(RemediationKind.Manual, "Guidance", "Tenant", ["Approval"], "Verify", "Rollback"),
+            "https://example.test", new("Documented", "None"));
+        var publication = new PublishedRuleSet("1", DateTimeOffset.UtcNow, "reviewed", [rule],
+            new("default", 1, [new(rule.Id, profileMode, "profile decision")]), "sha256:" + new string('a', 64), "{\"dlp.coverage\":1}");
+        using var environments = JsonDocument.Parse("[]");
+        var sections = new Dictionary<string, EvaluationEvidenceSection>(StringComparer.Ordinal)
+        {
+            [SectionKeys.Environments] = new(SectionKeys.Environments, SectionCoverage.Full, EvidenceConfidence.Documented,
+                environments.RootElement.Clone(), [Guid.NewGuid()])
+        };
+
+        var finding = Assert.Single(new RuleEvaluationRuntime(new()).Evaluate(
+            new(Guid.NewGuid(), Guid.NewGuid(), 1, publication, sections)));
+
+        Assert.Equal(FindingStatus.NotApplicable, finding.Status);
+    }
+
+    private static string WriteManifest(string catalogPath, string profilePath)
+    {
+        var manifest = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1,
+            catalogSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(catalogPath)))}",
+            profileSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(profilePath)))}"
+        });
+        File.WriteAllBytes(catalogPath + ".manifest.json", manifest);
+        return $"sha256:{Convert.ToHexStringLower(SHA256.HashData(manifest))}";
     }
 
     private static IReadOnlyDictionary<string, EvaluationEvidenceSection> Evidence(JsonElement fixture, RuleDefinition rule)

@@ -36,9 +36,12 @@ public sealed record PublishedRuleSet(
     DateTimeOffset PublishedAt,
     string PublicationAttestation,
     IReadOnlyList<RuleDefinition> Rules,
-    GovernanceProfile DefaultProfile);
+    GovernanceProfile DefaultProfile,
+    string ContentDigest = "legacy",
+    string EvaluatorVersionsJson = "{}");
 
 public interface IPublishedRuleCatalog
 {
     ValueTask<PublishedRuleSet?> GetCurrentAsync(CancellationToken cancellationToken);
+    ValueTask<PublishedRuleSet?> GetByDigestAsync(string contentDigest, CancellationToken cancellationToken);
 }

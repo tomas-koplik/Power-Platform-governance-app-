@@ -44,6 +44,7 @@ public sealed class TrustedRemediationProposalFactory(
     IPublishedRuleCatalog rules,
     ITrustedRemediationTemplateCatalog templates,
     IGovernanceStore governance,
+    RemediationEvidencePolicy evidencePolicy,
     TimeProvider timeProvider)
 {
     public async ValueTask<RemediationProposal> CreateAsync(
@@ -62,7 +63,8 @@ public sealed class TrustedRemediationProposalFactory(
         var template = templates.Find(rule.Remediation.TemplateId) ?? throw new CapabilityUnavailableException(ApiCapability.Remediation);
         if (!string.Equals(request.TemplateId, template.Id, StringComparison.Ordinal))
             throw new DomainConflictException("The requested template is not the published rule template.");
-        if (!await governance.EvidenceHashExistsAsync(customerId, request.SnapshotId, request.EvidenceHash, cancellationToken))
+        var evidence = await governance.FindEvidenceByHashAsync(customerId, request.SnapshotId, request.EvidenceHash, cancellationToken);
+        if (evidence is null)
             throw new DomainConflictException("The evidence hash is not bound to the supplied snapshot.");
         if (!string.Equals(request.TargetScope, finding.Scope, StringComparison.Ordinal))
             throw new DomainConflictException("The remediation target scope does not match the finding scope.");
@@ -72,10 +74,11 @@ public sealed class TrustedRemediationProposalFactory(
             throw new ArgumentException("Template parameters do not match the trusted allowlist.", nameof(request));
         var script = template.Render(parameters, request.TargetScope);
         var now = timeProvider.GetUtcNow();
-        if (request.EvidenceCapturedAt > now || request.EvidenceValidUntil <= now || request.EvidenceValidUntil <= request.EvidenceCapturedAt)
+        var evidenceValidUntil = evidencePolicy.ValidUntil(evidence);
+        if (evidence.CapturedAt > now || evidenceValidUntil <= now)
             throw new StaleEvidenceException();
         return new(Guid.NewGuid(), customerId, finding.FindingId, finding.SnapshotId, script, proposer, now,
-            request.EvidenceCapturedAt, request.EvidenceValidUntil, RemediationKind.Script,
+            evidence.CapturedAt, evidenceValidUntil, RemediationKind.Script,
             rule.Id, rule.Version, published.Version, template.Id, template.Version, request.EvidenceHash,
             JsonSerializer.Serialize(parameters), request.TargetScope, rule.Remediation.Verification, rule.Remediation.RollbackLimitations);
     }

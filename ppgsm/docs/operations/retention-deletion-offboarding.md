@@ -18,7 +18,7 @@ Lifecycle deletion does not override legal hold or a locked immutability interva
 
 1. Authenticate the request and obtain CustomerAdmin plus internal approval. Record contract/legal-hold status and an offboarding correlation ID.
 2. Set the customer to suspended, disable scheduled jobs, reject new snapshots, and wait for active jobs to reach a terminal state or cancel them idempotently.
-3. In the customer tenant, remove the PPGSM Power Platform RBAC assignment or legacy management-app registration, revoke admin consent, and remove the enterprise applications if no longer used. The customer administrator performs and evidences this step.
+3. In the customer tenant, use the configured external revocation adapter to remove delegated grants and apply the explicit `Preserve`, `Disable`, or `Remove` enterprise-application policy. Remove Power Platform RBAC only through the configured verified allowlisted endpoint. `PendingManualAction`, partial, or failed evidence blocks physical deletion; a customer administrator removes and evidences Power Platform RBAC manually when no supported endpoint and concrete assignment ID are configured. Never activate the legacy management-app fallback.
 4. Revoke/delete customer-specific certificates or keys. Do not delete shared daemon credentials while other customers remain onboarded.
 5. Produce the agreed final export using short-lived access; record receipt, then expire the export.
 6. Delete SQL tenant rows in a controlled order using an internal tenant context and an audited stored procedure. Verify every tenant table count is zero and RLS remains enabled.

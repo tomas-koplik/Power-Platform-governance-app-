@@ -128,6 +128,8 @@ public sealed class FinalIntegrationContractTests
     private sealed class StaticCatalog(PublishedRuleSet catalog) : IPublishedRuleCatalog
     {
         public ValueTask<PublishedRuleSet?> GetCurrentAsync(CancellationToken cancellationToken) => ValueTask.FromResult<PublishedRuleSet?>(catalog);
+        public ValueTask<PublishedRuleSet?> GetByDigestAsync(string contentDigest, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<PublishedRuleSet?>(contentDigest == catalog.ContentDigest ? catalog : null);
     }
 
     private sealed class FailingArtifactStore : IExportArtifactStore

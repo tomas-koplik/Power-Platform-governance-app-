@@ -11,6 +11,19 @@ const mocks = vi.hoisted(() => ({
   capabilities: vi.fn(),
   revoke: vi.fn(),
   reconsent: vi.fn(),
+  listSnapshots: vi.fn(),
+  listEvidence: vi.fn(),
+  getTenantSettings: vi.fn(),
+  getEnvironments: vi.fn(),
+  getDlpPolicies: vi.fn(),
+  getEvidence: vi.fn(),
+  compareSnapshots: vi.fn(),
+  createExport: vi.fn(),
+  getExport: vi.fn(),
+  downloadExport: vi.fn(),
+  eligibility: vi.fn(),
+  createProposal: vi.fn(),
+  reviewProposal: vi.fn(),
 }));
 
 vi.mock("../api", async () => {
@@ -20,7 +33,7 @@ vi.mock("../api", async () => {
     logout: vi.fn(),
     adapter: {
       kind: "live",
-      capabilities: { exceptions: false, exports: false, approvals: false },
+      capabilities: { exceptions: false, exports: false, approvals: false, offboarding: false },
       loadWorkspace: mocks.workspace,
       submitConsentCallback: mocks.callback,
       getConnection: mocks.connection,
@@ -31,14 +44,21 @@ vi.mock("../api", async () => {
       reconsentConnection: mocks.reconsent,
       requestOffboarding: vi.fn(),
       approveOffboarding: vi.fn(),
-      listSnapshots: vi.fn(),
-      compareSnapshots: vi.fn(),
-      createExport: vi.fn(),
-      getExport: vi.fn(),
-      downloadExport: vi.fn(),
+      listSnapshots: mocks.listSnapshots,
+      listEvidence: mocks.listEvidence,
+      getTenantSettings: mocks.getTenantSettings,
+      getEnvironments: mocks.getEnvironments,
+      getDlpPolicies: mocks.getDlpPolicies,
+      compareSnapshots: mocks.compareSnapshots,
+      createExport: mocks.createExport,
+      getExport: mocks.getExport,
+      downloadExport: mocks.downloadExport,
       createException: vi.fn(),
       startSnapshot: vi.fn(),
-      getEvidence: vi.fn(),
+      getEvidence: mocks.getEvidence,
+      getRemediationEligibility: mocks.eligibility,
+      createRemediationProposal: mocks.createProposal,
+      reviewRemediationProposal: mocks.reviewProposal,
     },
     __workspace: mockWorkspace,
   };
@@ -93,5 +113,85 @@ describe("live onboarding journeys", () => {
     await user.click(screen.getByRole("button", { name: "Reconsent" }));
     expect(mocks.reconsent).toHaveBeenCalledWith(mockWorkspace.customers[0].customerId);
     expect(screen.queryByLabelText(/administrator.*object/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("live evidence, export, and remediation journeys", () => {
+  const evidence = {
+    evidenceId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    section: "tenantSettings",
+    mediaType: "application/json",
+    contentHash: "sha256:verified",
+    capturedAt: "2026-07-14T09:42:00Z",
+    confidence: "Verified",
+    pageNumber: 1,
+    collectorId: "tenant-settings",
+    collectorVersion: "1.0.0",
+    parserSchemaVersion: "1",
+    completenessRationale: "All published fields were captured.",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.workspace.mockResolvedValue({ ...mockWorkspace, capabilities: { ...mockWorkspace.capabilities, evidence: true, dlp: true, compare: true, exports: true } });
+    mocks.listSnapshots.mockResolvedValue(mockWorkspace.snapshots);
+    mocks.listEvidence.mockResolvedValue({ snapshotId: mockWorkspace.snapshots[0].snapshotId, coverage: "Full", confidence: "Verified", evidenceIds: [evidence.evidenceId], items: [evidence], page: 1, pageSize: 20, total: 1 });
+    mocks.getTenantSettings.mockResolvedValue({ snapshotId: mockWorkspace.snapshots[0].snapshotId, state: "Complete", coverage: "Full", confidence: "Verified", evidenceIds: [evidence.evidenceId], items: [{ key: "trialEnvironmentsDisabled", value: true, evidenceId: evidence.evidenceId }], detail: "Complete." });
+    mocks.getEnvironments.mockResolvedValue({ snapshotId: mockWorkspace.snapshots[0].snapshotId, state: "Complete", coverage: "Full", confidence: "Verified", evidenceIds: [evidence.evidenceId], items: [], detail: "Complete." });
+    mocks.getDlpPolicies.mockResolvedValue({ snapshotId: mockWorkspace.snapshots[0].snapshotId, state: "Complete", coverage: "Full", confidence: "Verified", evidenceIds: [evidence.evidenceId], items: [], detail: "Complete." });
+    mocks.getEvidence.mockResolvedValue({ rawEvidenceReferenceId: evidence.evidenceId, sectionKey: "tenantSettings", mediaType: "application/json", content: { trialEnvironmentsDisabled: "[REDACTED]" } });
+    mocks.compareSnapshots.mockResolvedValue({ customerId: mockWorkspace.customers[0].customerId, baselineSnapshotId: mockWorkspace.snapshots[1].snapshotId, currentSnapshotId: mockWorkspace.snapshots[0].snapshotId, addedFindings: 1, resolvedFindings: 0, changedFindings: 1 });
+  });
+
+  it("drills through normalized evidence to the redacted source document", async () => {
+    const user = userEvent.setup();
+    renderAt("/evidence");
+    await user.click(await screen.findByRole("button", { name: "Inspect source evidence" }));
+    expect(await screen.findByRole("heading", { name: "Tenant settings" })).toBeInTheDocument();
+    expect(screen.getByText(/REDACTED/)).toBeInTheDocument();
+    expect(mocks.getEvidence).toHaveBeenCalledWith(mockWorkspace.customers[0].customerId, mockWorkspace.snapshots[0].snapshotId, evidence.evidenceId, false);
+  });
+
+  it("creates an export for the selected snapshot with the explicit format and PII contract", async () => {
+    const user = userEvent.setup();
+    mocks.createExport.mockResolvedValue({ exportJobId: "export", customerId: mockWorkspace.customers[0].customerId, snapshotId: mockWorkspace.snapshots[1].snapshotId, includesPii: false, format: "Json", status: "Queued", createdAt: "2026-07-14T10:00:00Z" });
+    mocks.getExport.mockResolvedValue({ exportJobId: "export", customerId: mockWorkspace.customers[0].customerId, snapshotId: mockWorkspace.snapshots[1].snapshotId, includesPii: false, format: "Json", status: "Running", createdAt: "2026-07-14T10:00:00Z" });
+    renderAt("/compare");
+    await user.selectOptions(await screen.findByLabelText("Export snapshot"), mockWorkspace.snapshots[1].snapshotId);
+    await user.click(screen.getByRole("button", { name: "Create JSON export" }));
+    expect(mocks.createExport).toHaveBeenCalledWith(mockWorkspace.customers[0].customerId, { snapshotId: mockWorkspace.snapshots[1].snapshotId, format: "Json", includePii: false });
+  });
+
+  it("displays completed export download integrity and expiry", async () => {
+    const user = userEvent.setup();
+    mocks.createExport.mockResolvedValue({ exportJobId: "export", customerId: mockWorkspace.customers[0].customerId, snapshotId: mockWorkspace.snapshots[0].snapshotId, includesPii: false, format: "Json", status: "Completed", createdAt: "2026-07-14T10:00:00Z", artifactContentHash: "sha256:artifact", artifactContentLength: 2048, artifactMediaType: "application/json", downloadExpiresAt: "2099-07-14T11:00:00Z" });
+    renderAt("/compare");
+    await user.click(await screen.findByRole("button", { name: "Create JSON export" }));
+    expect(await screen.findByText("sha256:artifact")).toBeInTheDocument();
+    expect(screen.getByText("2,048 bytes")).toBeInTheDocument();
+    expect(screen.getByText("application/json")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download JSON" })).toBeEnabled();
+  });
+
+  it("gates remediation eligibility by membership and capability", async () => {
+    mocks.workspace.mockResolvedValue({ ...mockWorkspace, session: { ...mockWorkspace.session, role: "Reader" }, capabilities: { ...mockWorkspace.capabilities, evidence: true, remediation: true, approvals: true } });
+    renderAt("/remediation");
+    expect(await screen.findByText("Customer administrator membership required")).toBeInTheDocument();
+    expect(mocks.eligibility).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Create server proposal" })).toBeDisabled();
+  });
+
+  it("keeps proposal creation separate from independent approval", async () => {
+    const user = userEvent.setup();
+    const adminWorkspace = { ...mockWorkspace, session: { ...mockWorkspace.session, role: "CustomerAdmin" as const }, capabilities: { ...mockWorkspace.capabilities, evidence: true, remediation: true, approvals: true } };
+    mocks.workspace.mockResolvedValue(adminWorkspace);
+    mocks.eligibility.mockResolvedValue({ eligible: true, findingId: mockWorkspace.findings[0].findingId, snapshotId: mockWorkspace.snapshots[0].snapshotId, templateId: "tenant-settings.restrict-production-creation.v1", templateVersion: 1, allowedParameters: ["disabled"], evidenceCapturedAt: evidence.capturedAt, evidenceValidUntil: "2099-07-15T09:42:00Z", target: mockWorkspace.findings[0].scope, verification: "Recollect settings.", rollback: "Manual rollback required." });
+    mocks.createProposal.mockResolvedValue({ proposalId: "proposal", customerId: mockWorkspace.customers[0].customerId, findingId: mockWorkspace.findings[0].findingId, snapshotId: mockWorkspace.snapshots[0].snapshotId, proposedBy: "subject-a", proposedAt: "2026-07-14T10:00:00Z", evidenceValidUntil: "2099-07-15T09:42:00Z", templateId: "tenant-settings.restrict-production-creation.v1", targetScope: mockWorkspace.findings[0].scope, verification: "Recollect settings.", rollback: "Manual rollback required.", status: "Proposed" });
+    renderAt("/remediation");
+    await user.click(await screen.findByRole("button", { name: "Create server proposal" }));
+    expect(await screen.findByRole("heading", { name: "Proposal Proposed" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approve as independent reviewer/ })).toBeDisabled();
+    expect(screen.queryByRole("textbox", { name: /script/i })).not.toBeInTheDocument();
+    expect(mocks.reviewProposal).not.toHaveBeenCalled();
   });
 });

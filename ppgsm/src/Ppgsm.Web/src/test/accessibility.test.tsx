@@ -9,7 +9,7 @@ vi.mock("../api", async () => {
     ApiProblem: class extends Error {},
     adapter: {
       kind: "mock",
-      capabilities: { exceptions: false, exports: false, approvals: false },
+      capabilities: { exceptions: false, exports: false, approvals: false, offboarding: false },
       loadWorkspace: async () => mockWorkspace,
       startSnapshot: vi.fn(),
     },
@@ -37,6 +37,6 @@ describe("application accessibility structure", () => {
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={["/remediation"]}><App /></MemoryRouter></QueryClientProvider>);
     expect(await screen.findByRole("heading", { name: "Simulated action" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Executed state" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Submit server proposal/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Create server proposal/ })).toBeDisabled();
   });
 });

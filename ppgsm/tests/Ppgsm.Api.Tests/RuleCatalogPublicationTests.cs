@@ -1,5 +1,6 @@
 using Ppgsm.Api;
 using Ppgsm.Core.Domain;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Ppgsm.Api.Tests;
@@ -23,14 +24,64 @@ public sealed class RuleCatalogPublicationTests
     }
 
     [Theory]
-    [InlineData("0.9.0", Attestation)]
-    [InlineData(Version, "untrusted")]
-    [InlineData(Version, "")]
-    public async Task Fails_closed_when_version_or_attestation_is_not_trusted(string version, string attestation)
+    [InlineData("0.9.0", false)]
+    [InlineData(Version, true)]
+    public async Task Fails_closed_when_version_or_manifest_digest_is_not_trusted(string version, bool untrustedDigest)
     {
-        var published = await Catalog(version, attestation).GetCurrentAsync(CancellationToken.None);
+        var published = await Catalog(version, untrustedDigest ? "sha256:" + new string('0', 64) : null).GetCurrentAsync(CancellationToken.None);
 
         Assert.Null(published);
+    }
+
+    [Fact]
+    public async Task Fails_closed_when_catalog_bytes_change_after_manifest_publication()
+    {
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var catalogPath = Path.Combine(directory.FullName, "catalog.yaml");
+            var profilePath = Path.Combine(directory.FullName, "default-profile.yaml");
+            File.Copy(CatalogPath(), catalogPath);
+            File.Copy(ProfilePath(), profilePath);
+            var digest = WriteManifest(catalogPath, profilePath);
+            await File.AppendAllTextAsync(catalogPath, " ");
+
+            Assert.Null(await new FilePublishedRuleCatalog(catalogPath, profilePath, Version, digest).GetCurrentAsync(CancellationToken.None));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Resolves_retained_v1_digest_after_v2_is_current()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            var v1 = Directory.CreateDirectory(Path.Combine(root.FullName, "v1"));
+            var v2 = Directory.CreateDirectory(Path.Combine(root.FullName, "v2"));
+            File.Copy(CatalogPath(), Path.Combine(v1.FullName, "catalog.yaml"));
+            File.Copy(ProfilePath(), Path.Combine(v1.FullName, "default-profile.yaml"));
+            var v2Catalog = (await File.ReadAllTextAsync(CatalogPath())).Replace("\"1.0.0\"", "\"2.0.0\"", StringComparison.Ordinal);
+            await File.WriteAllTextAsync(Path.Combine(v2.FullName, "catalog.yaml"), v2Catalog);
+            File.Copy(ProfilePath(), Path.Combine(v2.FullName, "default-profile.yaml"));
+            var v1Digest = WriteManifest(Path.Combine(v1.FullName, "catalog.yaml"), Path.Combine(v1.FullName, "default-profile.yaml"));
+            var v2Digest = WriteManifest(Path.Combine(v2.FullName, "catalog.yaml"), Path.Combine(v2.FullName, "default-profile.yaml"));
+            var catalog = new FilePublishedRuleCatalog(Path.Combine(v2.FullName, "catalog.yaml"), Path.Combine(v2.FullName, "default-profile.yaml"),
+                "2.0.0", $"{v2Digest};{v1Digest}");
+
+            var retained = await catalog.GetByDigestAsync(v1Digest, CancellationToken.None);
+
+            Assert.NotNull(retained);
+            Assert.Equal(Version, retained.Version);
+            Assert.Equal(v1Digest, retained.ContentDigest);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
     }
 
     [Fact]
@@ -40,7 +91,7 @@ public sealed class RuleCatalogPublicationTests
         await File.WriteAllTextAsync(malformed, "not-json-compatible-yaml");
         try
         {
-            var published = await new FilePublishedRuleCatalog(malformed, ProfilePath(), Version, Attestation)
+            var published = await new FilePublishedRuleCatalog(malformed, ProfilePath(), Version, WriteManifest(malformed, ProfilePath()))
                 .GetCurrentAsync(CancellationToken.None);
             Assert.Null(published);
         }
@@ -57,7 +108,7 @@ public sealed class RuleCatalogPublicationTests
         await File.WriteAllTextAsync(incomplete, "{\"id\":\"default\",\"version\":1,\"rules\":[]}");
         try
         {
-            var published = await new FilePublishedRuleCatalog(CatalogPath(), incomplete, Version, Attestation)
+            var published = await new FilePublishedRuleCatalog(CatalogPath(), incomplete, Version, WriteManifest(CatalogPath(), incomplete))
                 .GetCurrentAsync(CancellationToken.None);
             Assert.Null(published);
         }
@@ -76,9 +127,10 @@ public sealed class RuleCatalogPublicationTests
         await File.WriteAllTextAsync(invalid, (await File.ReadAllTextAsync(CatalogPath())).Replace(current, replacement, StringComparison.Ordinal));
         try
         {
-            var published = await new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, Attestation).GetCurrentAsync(CancellationToken.None);
+            var digest = WriteManifest(invalid, ProfilePath());
+            var published = await new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, digest).GetCurrentAsync(CancellationToken.None);
             Assert.Null(published);
-            Assert.False(new ApiCapabilityRegistry(new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, Attestation)).Status["Score"]);
+            Assert.False(new ApiCapabilityRegistry(new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, digest)).Status["Score"]);
         }
         finally
         {
@@ -118,8 +170,20 @@ public sealed class RuleCatalogPublicationTests
             value => Assert.False(value.GetProperty("scored").GetBoolean()));
     }
 
-    private static FilePublishedRuleCatalog Catalog(string version = Version, string attestation = Attestation) =>
-        new(CatalogPath(), ProfilePath(), version, attestation);
+    private static FilePublishedRuleCatalog Catalog(string version = Version, string? manifestDigest = null) =>
+        new(CatalogPath(), ProfilePath(), version, manifestDigest ?? WriteManifest(CatalogPath(), ProfilePath()));
+
+    private static string WriteManifest(string catalogPath, string profilePath)
+    {
+        var manifest = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1,
+            catalogSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(catalogPath)))}",
+            profileSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(profilePath)))}"
+        });
+        File.WriteAllBytes(catalogPath + ".manifest.json", manifest);
+        return $"sha256:{Convert.ToHexStringLower(SHA256.HashData(manifest))}";
+    }
 
     private static string CatalogPath() => Path.Combine(AppContext.BaseDirectory, "rules", "v1", "catalog.yaml");
     private static string ProfilePath() => Path.Combine(AppContext.BaseDirectory, "rules", "v1", "default-profile.yaml");
@@ -127,5 +191,7 @@ public sealed class RuleCatalogPublicationTests
     private sealed class StaticCatalog(PublishedRuleSet published) : IPublishedRuleCatalog
     {
         public ValueTask<PublishedRuleSet?> GetCurrentAsync(CancellationToken cancellationToken) => ValueTask.FromResult<PublishedRuleSet?>(published);
+        public ValueTask<PublishedRuleSet?> GetByDigestAsync(string contentDigest, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<PublishedRuleSet?>(contentDigest == published.ContentDigest ? published : null);
     }
 }

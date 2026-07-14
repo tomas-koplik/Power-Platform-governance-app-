@@ -26,6 +26,14 @@ param trustedRuleCatalogVersion string
 param trustedRuleCatalogAttestation string
 param graphVerifierBaseUri string
 param graphVerifierScopes array
+param enableExternalConsentRevocation bool = false
+param externalConsentRevocationGraphBaseUrl string = 'https://graph.microsoft.com/'
+param externalConsentRevocationClientApplicationId string = ''
+@allowed(['Preserve', 'Disable', 'Remove'])
+param externalConsentRevocationEnterpriseApplicationPolicy string = 'Preserve'
+param externalConsentRevocationPowerPlatformRbacEndpoint string = ''
+@allowed(['https://api.powerplatform.com/.default', 'https://api.bap.microsoft.com/.default'])
+param externalConsentRevocationPowerPlatformRbacResourceScope string = 'https://api.powerplatform.com/.default'
 param corsAllowedOrigins array
 param enableAppOnlyCertificate bool = false
 param appOnlyClientId string = ''
@@ -123,6 +131,32 @@ var appOnlyCertificateEnv = [
   {
     name: 'Collectors__AppOnlyCertificate__KeyVaultCertificateUri'
     value: appOnlyCertificateSecretUri
+  }
+]
+var externalConsentRevocationEnv = [
+  {
+    name: 'Offboarding__ExternalConsentRevocation__Enabled'
+    value: string(enableExternalConsentRevocation)
+  }
+  {
+    name: 'Offboarding__ExternalConsentRevocation__GraphBaseUrl'
+    value: externalConsentRevocationGraphBaseUrl
+  }
+  {
+    name: 'Offboarding__ExternalConsentRevocation__ClientApplicationId'
+    value: externalConsentRevocationClientApplicationId
+  }
+  {
+    name: 'Offboarding__ExternalConsentRevocation__EnterpriseApplicationPolicy'
+    value: externalConsentRevocationEnterpriseApplicationPolicy
+  }
+  {
+    name: 'Offboarding__ExternalConsentRevocation__PowerPlatformRbacEndpoint'
+    value: externalConsentRevocationPowerPlatformRbacEndpoint
+  }
+  {
+    name: 'Offboarding__ExternalConsentRevocation__PowerPlatformRbacResourceScope'
+    value: externalConsentRevocationPowerPlatformRbacResourceScope
   }
 ]
 
@@ -224,7 +258,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'api'
           image: apiImage
-          env: concat(commonEnv, featureFlagEnv, authorizedClientEnv, graphScopeEnv, corsOriginEnv, appOnlyCertificateEnv, [
+          env: concat(commonEnv, featureFlagEnv, authorizedClientEnv, graphScopeEnv, corsOriginEnv, appOnlyCertificateEnv, externalConsentRevocationEnv, [
             {
               name: 'ASPNETCORE_ENVIRONMENT'
               value: 'Production'
@@ -274,7 +308,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
               value: trustedRuleCatalogVersion
             }
             {
-              name: 'RuleCatalog__TrustedPublicationAttestation'
+              name: 'RuleCatalog__TrustedManifestDigests'
               value: trustedRuleCatalogAttestation
             }
             {

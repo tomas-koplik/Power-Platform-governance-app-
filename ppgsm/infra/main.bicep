@@ -23,6 +23,16 @@ param trustedRuleCatalogVersion string = ''
 param trustedRuleCatalogAttestation string = ''
 param graphVerifierBaseUri string = 'https://graph.microsoft.com/v1.0'
 param graphVerifierScopes array = ['https://graph.microsoft.com/.default']
+param enableExternalConsentRevocation bool = false
+@description('Independent protected-environment approval. Production enablement is rejected unless this is true.')
+param externalConsentRevocationApproved bool = false
+param externalConsentRevocationGraphBaseUrl string = 'https://graph.microsoft.com/'
+param externalConsentRevocationClientApplicationId string = ''
+@allowed(['Preserve', 'Disable', 'Remove'])
+param externalConsentRevocationEnterpriseApplicationPolicy string = 'Preserve'
+param externalConsentRevocationPowerPlatformRbacEndpoint string = ''
+@allowed(['https://api.powerplatform.com/.default', 'https://api.bap.microsoft.com/.default'])
+param externalConsentRevocationPowerPlatformRbacResourceScope string = 'https://api.powerplatform.com/.default'
 param corsAllowedOrigins array = []
 param enableAppOnlyCertificate bool = false
 param appOnlyClientId string = ''
@@ -97,7 +107,15 @@ assert productionTrustConfigured = environmentName == 'dev' || (
 assert authoritativeRegionMatchesDeployment = authoritativeDataRegion == location
 assert productionCallbackOriginAllowed = environmentName == 'dev' || contains(corsAllowedOrigins, replace(onboardingConsentCallbackUri, '/onboarding/callback', ''))
 assert appOnlyCertificateIsPocGated = !enableAppOnlyCertificate || (
-  environmentName != 'prod' && !empty(appOnlyClientId) && startsWith(appOnlyCertificateSecretUri, 'https://')
+  !empty(appOnlyClientId) && startsWith(appOnlyCertificateSecretUri, 'https://')
+)
+assert productionExternalRevocationIsApproved = environmentName != 'prod' || !enableExternalConsentRevocation || externalConsentRevocationApproved
+assert externalRevocationIsConfigured = !enableExternalConsentRevocation || (
+  externalConsentRevocationGraphBaseUrl == 'https://graph.microsoft.com/'
+  && !empty(externalConsentRevocationClientApplicationId)
+  && enableAppOnlyCertificate
+  && !empty(appOnlyClientId)
+  && startsWith(appOnlyCertificateSecretUri, 'https://')
 )
 
 var tags = {
@@ -243,6 +261,12 @@ module compute 'modules/compute.bicep' = {
     trustedRuleCatalogAttestation: trustedRuleCatalogAttestation
     graphVerifierBaseUri: graphVerifierBaseUri
     graphVerifierScopes: graphVerifierScopes
+    enableExternalConsentRevocation: enableExternalConsentRevocation
+    externalConsentRevocationGraphBaseUrl: externalConsentRevocationGraphBaseUrl
+    externalConsentRevocationClientApplicationId: externalConsentRevocationClientApplicationId
+    externalConsentRevocationEnterpriseApplicationPolicy: externalConsentRevocationEnterpriseApplicationPolicy
+    externalConsentRevocationPowerPlatformRbacEndpoint: externalConsentRevocationPowerPlatformRbacEndpoint
+    externalConsentRevocationPowerPlatformRbacResourceScope: externalConsentRevocationPowerPlatformRbacResourceScope
     corsAllowedOrigins: corsAllowedOrigins
     enableAppOnlyCertificate: enableAppOnlyCertificate
     appOnlyClientId: appOnlyClientId

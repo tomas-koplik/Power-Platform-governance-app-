@@ -101,7 +101,13 @@ public sealed class RuleEvaluationRuntime(RuleEvaluatorRegistry registry)
         }
         else if (profile.Mode is "disabled" or "advisory")
         {
+            status = FindingStatus.NotApplicable;
             observed = $"Rule profile mode is {profile.Mode}: {profile.Reason}";
+        }
+        else if (!IsApplicable(rule, canonicalSections, out var applicabilityReason))
+        {
+            status = FindingStatus.NotApplicable;
+            observed = applicabilityReason;
         }
         else if (rule.PocGate.Status is "PocRequired" or "Blocked" && context.PocValidatedRuleIds?.Contains(rule.Id) != true)
         {
@@ -133,7 +139,32 @@ public sealed class RuleEvaluationRuntime(RuleEvaluatorRegistry registry)
             rule.Rationale, rule.Recommendation, rule.Remediation.Type, AreaWeight: rule.AreaWeight,
             EvaluatorRatio: ratio, RuleVersion: rule.Version, CatalogVersion: context.RuleSet.Version,
             EvaluatorKey: rule.Evaluator.Key, EvaluatorVersion: rule.Evaluator.Version,
-            EvidenceLinksJson: JsonSerializer.Serialize(links));
+            EvidenceLinksJson: JsonSerializer.Serialize(links),
+            PublicationContentDigest: context.RuleSet.ContentDigest,
+            EvaluatorVersionsJson: context.RuleSet.EvaluatorVersionsJson);
+    }
+
+    private static bool IsApplicable(
+        RuleDefinition rule,
+        IReadOnlyDictionary<string, EvaluationEvidenceSection> sections,
+        out string reason)
+    {
+        reason = "Rule is applicable.";
+        if (rule.Applicability.Mode is "always" or "profile" or "customerProfile") return true;
+        if (rule.Applicability.Mode == "resource-present")
+        {
+            var key = SectionKeys.Canonicalize(rule.Applicability.ProfileKey);
+            var present = sections.TryGetValue(key, out var section) && section.Data.ValueKind switch
+            {
+                JsonValueKind.Array => section.Data.GetArrayLength() > 0,
+                JsonValueKind.Object => section.Data.EnumerateObject().Any(),
+                _ => false
+            };
+            reason = present ? reason : $"Applicability resource '{key}' is not present.";
+            return present;
+        }
+        reason = $"Applicability mode '{rule.Applicability.Mode}' is unsupported.";
+        return false;
     }
 
     private static string? GateEvidence(RuleDefinition rule, IReadOnlyDictionary<string, EvaluationEvidenceSection> sections)

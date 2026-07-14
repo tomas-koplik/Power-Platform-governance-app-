@@ -38,6 +38,7 @@ public sealed class PpgsmDbContext(DbContextOptions<PpgsmDbContext> options, ICu
     public DbSet<DlpPolicyEvidence> DlpPolicyEvidence => Set<DlpPolicyEvidence>();
     public DbSet<SnapshotEnvironmentScope> SnapshotEnvironmentScopes => Set<SnapshotEnvironmentScope>();
     public DbSet<Finding> Findings => Set<Finding>();
+    public DbSet<PocApproval> PocApprovals => Set<PocApproval>();
     public DbSet<GovernanceException> GovernanceExceptions => Set<GovernanceException>();
     public DbSet<ExportJob> ExportJobs => Set<ExportJob>();
     public DbSet<RemediationProposal> RemediationProposals => Set<RemediationProposal>();
@@ -169,7 +170,18 @@ public sealed class PpgsmDbContext(DbContextOptions<PpgsmDbContext> options, ICu
             entity.Property(value => value.CatalogVersion).HasMaxLength(40);
             entity.Property(value => value.EvaluatorKey).HasMaxLength(100);
             entity.Property(value => value.EvidenceLinksJson).HasMaxLength(-1);
+            entity.Property(value => value.PublicationContentDigest).HasMaxLength(80);
+            entity.Property(value => value.EvaluatorVersionsJson).HasMaxLength(-1);
             entity.HasIndex(value => new { value.CustomerId, value.SnapshotId, value.RuleId }).IsUnique();
+        });
+        modelBuilder.Entity<PocApproval>(entity =>
+        {
+            entity.HasKey(value => value.PocApprovalId);
+            entity.Property(value => value.RuleId).HasMaxLength(100);
+            entity.Property(value => value.Identity).HasMaxLength(200);
+            entity.Property(value => value.ApiVersion).HasMaxLength(100);
+            entity.Property(value => value.ApprovedBy).HasMaxLength(200);
+            entity.HasIndex(value => new { value.CustomerId, value.RuleId, value.Identity, value.ApiVersion, value.ExpiresAt });
         });
         modelBuilder.Entity<GovernanceException>(entity =>
         {

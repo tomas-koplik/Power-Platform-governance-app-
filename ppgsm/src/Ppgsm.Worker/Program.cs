@@ -78,6 +78,7 @@ builder.Services.AddSingleton<ISnapshotJobStore>(provider => provider.GetRequire
 builder.Services.AddSingleton<ISnapshotStore>(provider => provider.GetRequiredService<SqlDurableStore>());
 builder.Services.AddSingleton<IEvaluationEvidenceStore>(provider => provider.GetRequiredService<SqlDurableStore>());
 builder.Services.AddSingleton<IEvidenceProjectionStore>(provider => provider.GetRequiredService<SqlDurableStore>());
+builder.Services.AddSingleton<IPocApprovalStore>(provider => provider.GetRequiredService<SqlDurableStore>());
 builder.Services.AddSingleton<IGovernanceStore>(provider => provider.GetRequiredService<SqlDurableStore>());
 builder.Services.AddSingleton<ICustomerQueueAdapter>(provider => provider.GetRequiredService<SqlDurableStore>());
 builder.Services.AddSingleton<ICustomerOffboardingStore>(provider => provider.GetRequiredService<SqlDurableStore>());
@@ -91,7 +92,7 @@ builder.Services.AddSingleton<IPublishedRuleCatalog>(provider => new FilePublish
 	Path.Combine(AppContext.BaseDirectory, "rules", "v1", "catalog.yaml"),
 	Path.Combine(AppContext.BaseDirectory, "rules", "v1", "default-profile.yaml"),
 	builder.Configuration["RuleCatalog:TrustedVersion"] ?? string.Empty,
-	builder.Configuration["RuleCatalog:TrustedPublicationAttestation"] ?? string.Empty,
+	builder.Configuration["RuleCatalog:TrustedManifestDigests"] ?? string.Empty,
 	provider.GetRequiredService<RuleEvaluatorRegistry>()));
 builder.Services.AddSingleton<SnapshotEvaluationService>();
 builder.Services.AddSingleton(new JsonEvidencePackageOptions(
@@ -170,8 +171,15 @@ public sealed class ExportJobProcessor(
 				?? throw new DomainConflictException("Export snapshot does not exist for the tenant.");
 			if (snapshot.CustomerId != job.CustomerId || snapshot.SnapshotId != job.SnapshotId)
 				throw new TenantAccessDeniedException();
-			var published = await rules.GetCurrentAsync(cancellationToken)
-				?? throw new DomainConflictException("Export requires a trusted published rule catalog.");
+			var findings = await governance.ListFindingsAsync(job.CustomerId, job.SnapshotId, timeProvider.GetUtcNow(), cancellationToken);
+			var publicationDigests = findings.Select(value => value.PublicationContentDigest).Distinct(StringComparer.Ordinal).ToArray();
+			var evaluatorSets = findings.Select(value => value.EvaluatorVersionsJson).Distinct(StringComparer.Ordinal).ToArray();
+			if (publicationDigests.Length != 1 || evaluatorSets.Length != 1 || publicationDigests[0] == "legacy")
+				throw new DomainConflictException("Export findings do not identify one immutable rule publication.");
+			var published = await rules.GetByDigestAsync(publicationDigests[0], cancellationToken)
+				?? throw new DomainConflictException("The exact trusted rule publication used by the findings is unavailable.");
+			if (!string.Equals(published.EvaluatorVersionsJson, evaluatorSets[0], StringComparison.Ordinal))
+				throw new DomainConflictException("The exact evaluator version set used by the findings is unavailable.");
 			var tenantSettings = await projections.ListTenantSettingsAsync(job.CustomerId, job.SnapshotId, cancellationToken);
 			var environments = await projections.ListEnvironmentsAsync(job.CustomerId, job.SnapshotId, cancellationToken);
 			var dlpPolicies = await projections.ListDlpPoliciesAsync(job.CustomerId, job.SnapshotId, cancellationToken);
@@ -182,7 +190,6 @@ public sealed class ExportJobProcessor(
 				var payloads = await evidence.LoadEvaluationEvidenceAsync(job.CustomerId, job.SnapshotId, cancellationToken);
 				privilegedBodies = payloads.ToDictionary(value => value.Reference.RawEvidenceReferenceId, value => value.Content);
 			}
-			var findings = await governance.ListFindingsAsync(job.CustomerId, job.SnapshotId, timeProvider.GetUtcNow(), cancellationToken);
 			await using var stream = new MemoryStream();
 			var package = await packageBuilder.WriteAsync(new(job, snapshot, published, tenantSettings, environments,
 				dlpPolicies, metadata, privilegedBodies, findings, timeProvider.GetUtcNow()), stream, cancellationToken);

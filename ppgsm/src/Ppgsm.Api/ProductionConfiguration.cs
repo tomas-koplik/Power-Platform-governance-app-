@@ -18,10 +18,14 @@ public static class ProductionConfiguration
         Require(configuration, "Onboarding:Verification:DelegatedResourceApplicationId");
         RequireValues(configuration, "Onboarding:Verification:ExpectedDelegatedScopes");
         Require(configuration, "RuleCatalog:TrustedVersion");
-        Require(configuration, "RuleCatalog:TrustedPublicationAttestation");
+        Require(configuration, "RuleCatalog:TrustedManifestDigests");
         RequireValues(configuration, "Cors:AllowedOrigins", requireHttps: true);
         Require(configuration, "Collectors:AppOnlyCertificate:ClientId");
         RequireHttpsUri(configuration, "Collectors:AppOnlyCertificate:KeyVaultCertificateUri");
+
+        var revocation = configuration.GetSection(ExternalConsentRevocationOptions.SectionName)
+            .Get<ExternalConsentRevocationOptions>() ?? new();
+        revocation.Validate();
     }
 
     private static void Require(IConfiguration configuration, string key)

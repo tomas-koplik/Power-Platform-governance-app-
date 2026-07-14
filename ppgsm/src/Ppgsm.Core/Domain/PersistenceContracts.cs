@@ -13,7 +13,7 @@ public interface IGovernanceStore
     ValueTask<IReadOnlyList<Finding>> ListFindingsAsync(Guid customerId, Guid snapshotId, DateTimeOffset now, CancellationToken cancellationToken);
     ValueTask ReplaceFindingsAsync(Guid customerId, Guid snapshotId, IReadOnlyCollection<Finding> findings, CancellationToken cancellationToken);
     ValueTask<Finding?> FindFindingAsync(Guid customerId, Guid snapshotId, Guid findingId, CancellationToken cancellationToken);
-    ValueTask<bool> EvidenceHashExistsAsync(Guid customerId, Guid snapshotId, string evidenceHash, CancellationToken cancellationToken);
+    ValueTask<RawEvidenceReference?> FindEvidenceByHashAsync(Guid customerId, Guid snapshotId, string evidenceHash, CancellationToken cancellationToken);
     ValueTask<GovernanceException> AddExceptionAsync(GovernanceException exception, CancellationToken cancellationToken);
     ValueTask<ExportJob> AddExportAsync(ExportJob job, CancellationToken cancellationToken);
     ValueTask<ExportJob?> FindExportAsync(Guid customerId, Guid exportJobId, CancellationToken cancellationToken);
@@ -23,6 +23,7 @@ public interface IGovernanceStore
         ExportArtifactDescriptor artifact, CancellationToken cancellationToken);
     ValueTask FailExportAsync(Guid exportJobId, string reason, CancellationToken cancellationToken);
     ValueTask<RemediationProposal> AddProposalAsync(RemediationProposal proposal, CancellationToken cancellationToken);
+    ValueTask<IReadOnlyList<RemediationProposal>> ListProposalsAsync(Guid customerId, RemediationProposalStatus? status, CancellationToken cancellationToken);
     ValueTask<RemediationProposal?> FindProposalAsync(Guid customerId, Guid proposalId, CancellationToken cancellationToken);
     ValueTask SaveProposalAsync(RemediationProposal proposal, CancellationToken cancellationToken);
 }
@@ -40,6 +41,13 @@ public interface IEvaluationEvidenceStore
         Guid customerId, Guid snapshotId, CancellationToken cancellationToken);
     ValueTask SaveEnvironmentScopeAsync(SnapshotEnvironmentScope scope, CancellationToken cancellationToken);
     ValueTask SaveNormalizedEvidenceAsync(Guid customerId, Guid snapshotId, NormalizedEvidenceProjection projection, CancellationToken cancellationToken);
+}
+
+public interface IPocApprovalStore
+{
+    ValueTask<PocApproval> AddPocApprovalAsync(PocApproval approval, CancellationToken cancellationToken);
+    ValueTask<IReadOnlySet<string>> GetApprovedRuleIdsAsync(
+        Guid customerId, string identity, string apiVersion, DateTimeOffset now, CancellationToken cancellationToken);
 }
 
 public interface IEvidenceProjectionStore
@@ -219,7 +227,23 @@ public interface ICustomerQueueAdapter
     ValueTask CancelCustomerJobsAsync(Guid customerId, CancellationToken cancellationToken);
 }
 
-public sealed record ExternalConsentRevocationResult(bool Succeeded, string? EvidenceReference, string Detail);
+public enum ExternalConsentRevocationStatus { Succeeded, AlreadyRevoked, PendingManualAction, Partial, Failed }
+
+public sealed record ExternalConsentRevocationEvidence(
+    string Operation,
+    string Endpoint,
+    int? StatusCode,
+    string? RequestId,
+    string ResponseSha256);
+
+public sealed record ExternalConsentRevocationResult(
+    ExternalConsentRevocationStatus Status,
+    string? EvidenceReference,
+    IReadOnlyCollection<ExternalConsentRevocationEvidence> Evidence,
+    string Detail)
+{
+    public bool Succeeded => Status is ExternalConsentRevocationStatus.Succeeded or ExternalConsentRevocationStatus.AlreadyRevoked;
+}
 
 public interface IExternalConsentRevocationAdapter
 {

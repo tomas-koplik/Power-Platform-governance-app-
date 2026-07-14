@@ -158,7 +158,7 @@ public sealed class AuditMiddleware(RequestDelegate next)
     }
 }
 
-public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipStore, ITenantConnectionStore, ISnapshotStore, IRawEvidenceAuthorizationStore, IAuditSink, ISnapshotEvidenceSink, ICollectorCheckpointStore, ISectionProgressSink, IGovernanceStore, IEvaluationEvidenceStore, IEvidenceProjectionStore, IExportArtifactStore, IExportDownloadAuthorizer, ICustomerOffboardingStore, ICustomerQueueAdapter
+public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipStore, ITenantConnectionStore, ISnapshotStore, IRawEvidenceAuthorizationStore, IAuditSink, ISnapshotEvidenceSink, ICollectorCheckpointStore, ISectionProgressSink, IGovernanceStore, IEvaluationEvidenceStore, IEvidenceProjectionStore, IPocApprovalStore, IExportArtifactStore, IExportDownloadAuthorizer, ICustomerOffboardingStore, ICustomerQueueAdapter
 {
     private readonly ConcurrentDictionary<Guid, Customer> _customers = new();
     private readonly ConcurrentDictionary<(Guid CustomerId, Guid TenantId, Guid ObjectId), TenantMembership> _memberships = new();
@@ -179,6 +179,7 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
     private readonly ConcurrentDictionary<Guid, DlpPolicyEvidence> _dlpPolicies = new();
     private readonly ConcurrentDictionary<(Guid CustomerId, Guid ExportJobId), byte[]> _exportArtifacts = new();
     private readonly ConcurrentDictionary<Guid, RemediationProposal> _proposals = new();
+    private readonly ConcurrentDictionary<Guid, PocApproval> _pocApprovals = new();
 
     public ValueTask<Customer?> FindCustomerAsync(Guid customerId, CancellationToken cancellationToken)
     {
@@ -371,9 +372,9 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
         return ValueTask.FromResult(finding?.CustomerId == customerId && finding.SnapshotId == snapshotId ? finding : null);
     }
 
-    public ValueTask<bool> EvidenceHashExistsAsync(Guid customerId, Guid snapshotId, string evidenceHash, CancellationToken cancellationToken) =>
-        ValueTask.FromResult(_evidence.Values.Any(value => value.Reference.CustomerId == customerId &&
-            value.Reference.SnapshotId == snapshotId && string.Equals(value.Reference.ContentHash, evidenceHash, StringComparison.Ordinal)));
+    public ValueTask<RawEvidenceReference?> FindEvidenceByHashAsync(Guid customerId, Guid snapshotId, string evidenceHash, CancellationToken cancellationToken) =>
+        ValueTask.FromResult(_evidence.Values.Select(value => value.Reference).SingleOrDefault(value => value.CustomerId == customerId &&
+            value.SnapshotId == snapshotId && string.Equals(value.ContentHash, evidenceHash, StringComparison.Ordinal)));
 
     public ValueTask ReplaceFindingsAsync(Guid customerId, Guid snapshotId, IReadOnlyCollection<Finding> findings, CancellationToken cancellationToken)
     {
@@ -383,6 +384,21 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
         foreach (var finding in findings) _findings[finding.FindingId] = finding;
         return ValueTask.CompletedTask;
     }
+
+    public ValueTask<PocApproval> AddPocApprovalAsync(PocApproval approval, CancellationToken cancellationToken)
+    {
+        if (approval.ExpiresAt <= approval.ApprovedAt) throw new ArgumentException("PoC approval expiry must be after approval.", nameof(approval));
+        if (!_evidence.TryGetValue(approval.EvidenceReferenceId, out var evidence) || evidence.Reference.CustomerId != approval.CustomerId ||
+            !string.Equals(evidence.Reference.PrincipalIdentityBasis, approval.Identity, StringComparison.Ordinal) ||
+            !string.Equals(evidence.Reference.ApiVersion, approval.ApiVersion, StringComparison.Ordinal)) throw new TenantAccessDeniedException();
+        if (!_pocApprovals.TryAdd(approval.PocApprovalId, approval)) throw new DomainConflictException("PoC approval already exists.");
+        return ValueTask.FromResult(approval);
+    }
+
+    public ValueTask<IReadOnlySet<string>> GetApprovedRuleIdsAsync(Guid customerId, string identity, string apiVersion,
+        DateTimeOffset now, CancellationToken cancellationToken) => ValueTask.FromResult<IReadOnlySet<string>>(
+            _pocApprovals.Values.Where(value => value.Matches(customerId, value.RuleId, identity, apiVersion, now))
+                .Select(value => value.RuleId).ToHashSet(StringComparer.Ordinal));
 
     public ValueTask<GovernanceException> AddExceptionAsync(GovernanceException exception, CancellationToken cancellationToken)
     {
@@ -477,6 +493,11 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
         return ValueTask.FromResult(proposal?.CustomerId == customerId ? proposal : null);
     }
 
+    public ValueTask<IReadOnlyList<RemediationProposal>> ListProposalsAsync(Guid customerId, RemediationProposalStatus? status, CancellationToken cancellationToken) =>
+        ValueTask.FromResult<IReadOnlyList<RemediationProposal>>(_proposals.Values
+            .Where(value => value.CustomerId == customerId && (status is null || value.Status == status))
+            .OrderByDescending(value => value.ProposedAt).ThenBy(value => value.ProposalId).ToArray());
+
     public ValueTask SaveProposalAsync(RemediationProposal proposal, CancellationToken cancellationToken) => ValueTask.CompletedTask;
 
     public ValueTask<CustomerLegalHold?> GetLegalHoldAsync(Guid customerId, CancellationToken cancellationToken)
@@ -526,7 +547,7 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
 public sealed class UnavailableExternalConsentRevocationAdapter : IExternalConsentRevocationAdapter
 {
     public ValueTask<ExternalConsentRevocationResult> RevokeAsync(Guid customerId, CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new ExternalConsentRevocationResult(false, null,
+        ValueTask.FromResult(new ExternalConsentRevocationResult(ExternalConsentRevocationStatus.PendingManualAction, null, [],
             "External tenant consent revocation is not configured."));
 }
 

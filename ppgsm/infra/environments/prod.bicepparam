@@ -21,6 +21,9 @@ param persistenceMode = 'Sql'
 param evidenceStorageMode = 'Blob'
 param queueMode = 'ServiceBus'
 param enableScheduler = false
+param enableExternalConsentRevocation = false
+param externalConsentRevocationApproved = false
+param externalConsentRevocationEnterpriseApplicationPolicy = 'Preserve'
 param featureFlags = {
   EnableLegacyPowerPlatformManagementApp: false
   EnableScheduledSnapshots: false

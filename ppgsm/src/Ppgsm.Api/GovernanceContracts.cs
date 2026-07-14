@@ -5,10 +5,14 @@ namespace Ppgsm.Api;
 public enum ApiCapability
 {
     Portfolio, Onboarding, Connections, Snapshots, Evidence, Findings, Score, Dlp,
-    Compare, Exports, Exceptions, Remediation, Approvals, DirectExecution, CloudQueue, CloudStorage
+    Compare, Exports, Exceptions, Remediation, Approvals, Offboarding, DirectExecution, CloudQueue, CloudStorage,
+    PrivilegedRawEvidence
 }
 
-public sealed class ApiCapabilityRegistry(IPublishedRuleCatalog rules, ITrustedRemediationTemplateCatalog templates)
+public sealed class ApiCapabilityRegistry(
+    IPublishedRuleCatalog rules,
+    ITrustedRemediationTemplateCatalog templates,
+    OffboardingCapability offboarding)
 {
     private static readonly HashSet<ApiCapability> Enabled =
     [
@@ -19,6 +23,11 @@ public sealed class ApiCapabilityRegistry(IPublishedRuleCatalog rules, ITrustedR
 
     public IReadOnlyDictionary<string, bool> Status => Enum.GetValues<ApiCapability>()
         .ToDictionary(value => value.ToString(), IsEnabled, StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyDictionary<string, bool> ForRole(MembershipRole role) => Status
+        .ToDictionary(value => value.Key, value => value.Key == nameof(ApiCapability.PrivilegedRawEvidence)
+            ? role == MembershipRole.InternalAdmin
+            : value.Value, StringComparer.OrdinalIgnoreCase);
 
     public void Require(ApiCapability capability)
     {
@@ -35,6 +44,7 @@ public sealed class ApiCapabilityRegistry(IPublishedRuleCatalog rules, ITrustedR
             ApiCapability.Score => published is not null,
             ApiCapability.Remediation => published?.Rules.Any(rule => rule.Remediation.Type == RemediationKind.Script &&
                 !string.IsNullOrWhiteSpace(rule.Remediation.TemplateId) && templates.Find(rule.Remediation.TemplateId) is not null) == true,
+            ApiCapability.Offboarding => offboarding.Enabled,
             _ => Enabled.Contains(capability)
         };
     }
@@ -43,12 +53,13 @@ public sealed class ApiCapabilityRegistry(IPublishedRuleCatalog rules, ITrustedR
 public sealed class NoPublishedRuleCatalog : IPublishedRuleCatalog
 {
     public ValueTask<PublishedRuleSet?> GetCurrentAsync(CancellationToken cancellationToken) => ValueTask.FromResult<PublishedRuleSet?>(null);
+    public ValueTask<PublishedRuleSet?> GetByDigestAsync(string contentDigest, CancellationToken cancellationToken) => ValueTask.FromResult<PublishedRuleSet?>(null);
 }
 
 public sealed class CapabilityUnavailableException(ApiCapability capability)
     : InvalidOperationException($"Capability '{capability}' is not available in this deployment.");
 
-public sealed record WorkspaceSessionResponse(string DisplayName, MembershipRole Role, string AuthMode);
+public sealed record WorkspaceSessionResponse(string DisplayName, MembershipRole Role, string AuthMode, string SubjectKey);
 public sealed record WorkspaceConnectionResponse(ConnectionMode Mode, ConnectionStatus Status, string Detail);
 public sealed record WorkspaceCustomerResponse(Guid CustomerId, string Name, Guid EntraTenantId, string Region, CustomerStatus Status, WorkspaceConnectionResponse Connection);
 public sealed record WorkspaceScoreResponse(int Overall, string Tier, int Evaluated, int Total, SectionCoverage Confidence, IReadOnlyDictionary<string, int> Areas);
@@ -65,7 +76,7 @@ public sealed record WorkspaceResponse(
 
 public sealed record CreateExceptionRequest(string Reason, DateTimeOffset ExpiresAt);
 public sealed record CreateExportRequest(ExportFormat Format, Guid SnapshotId, bool IncludePii = false);
-public sealed record CreateRemediationProposalRequest(Guid FindingId, Guid SnapshotId, string TemplateId, JsonElement Parameters, string EvidenceHash, string TargetScope, DateTimeOffset EvidenceCapturedAt, DateTimeOffset EvidenceValidUntil);
+public sealed record CreateRemediationProposalRequest(Guid FindingId, Guid SnapshotId, string TemplateId, JsonElement Parameters, string EvidenceHash, string TargetScope);
 public sealed record ReviewRemediationRequest(bool Approved, string? Reason, Guid LatestSnapshotId);
 public sealed record RequestOffboardingRequest(DateTimeOffset RetentionExpiresAt);
 

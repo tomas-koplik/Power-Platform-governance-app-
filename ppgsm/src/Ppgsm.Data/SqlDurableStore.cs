@@ -41,6 +41,7 @@ public sealed class SqlDurableStore(
     IGovernanceStore,
     IEvaluationEvidenceStore,
     IEvidenceProjectionStore,
+    IPocApprovalStore,
     ISnapshotJobStore,
     ICustomerQueueAdapter,
     ICustomerOffboardingStore,
@@ -251,11 +252,11 @@ public sealed class SqlDurableStore(
             value.SnapshotId == snapshotId && value.FindingId == findingId, cancellationToken);
     }
 
-    public async ValueTask<bool> EvidenceHashExistsAsync(Guid customerId, Guid snapshotId, string evidenceHash, CancellationToken cancellationToken)
+    public async ValueTask<RawEvidenceReference?> FindEvidenceByHashAsync(Guid customerId, Guid snapshotId, string evidenceHash, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(evidenceHash)) return false;
+        if (string.IsNullOrWhiteSpace(evidenceHash)) return null;
         await using var db = CustomerContext(customerId);
-        return await db.RawEvidenceReferences.AsNoTracking().AnyAsync(value => value.CustomerId == customerId &&
+        return await db.RawEvidenceReferences.AsNoTracking().SingleOrDefaultAsync(value => value.CustomerId == customerId &&
             value.SnapshotId == snapshotId && value.ContentHash == evidenceHash, cancellationToken);
     }
 
@@ -268,6 +269,29 @@ public sealed class SqlDurableStore(
         db.Findings.AddRange(findings);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async ValueTask<PocApproval> AddPocApprovalAsync(PocApproval approval, CancellationToken cancellationToken)
+    {
+        if (approval.ExpiresAt <= approval.ApprovedAt) throw new ArgumentException("PoC approval expiry must be after approval.", nameof(approval));
+        await using var db = CustomerContext(approval.CustomerId);
+        var evidenceMatches = await db.RawEvidenceReferences.AsNoTracking().AnyAsync(value =>
+            value.CustomerId == approval.CustomerId && value.RawEvidenceReferenceId == approval.EvidenceReferenceId &&
+            value.PrincipalIdentityBasis == approval.Identity && value.ApiVersion == approval.ApiVersion, cancellationToken);
+        if (!evidenceMatches) throw new TenantAccessDeniedException();
+        db.PocApprovals.Add(approval);
+        await db.SaveChangesAsync(cancellationToken);
+        return approval;
+    }
+
+    public async ValueTask<IReadOnlySet<string>> GetApprovedRuleIdsAsync(Guid customerId, string identity, string apiVersion,
+        DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        await using var db = CustomerContext(customerId);
+        var ruleIds = await db.PocApprovals.AsNoTracking().Where(value => value.CustomerId == customerId &&
+            value.Identity == identity && value.ApiVersion == apiVersion && value.ApprovedAt <= now && value.ExpiresAt > now)
+            .Select(value => value.RuleId).Distinct().ToArrayAsync(cancellationToken);
+        return ruleIds.ToHashSet(StringComparer.Ordinal);
     }
 
     public async ValueTask<IReadOnlyCollection<EvaluationEvidencePayload>> LoadEvaluationEvidenceAsync(Guid customerId, Guid snapshotId, CancellationToken cancellationToken)
@@ -401,6 +425,14 @@ public sealed class SqlDurableStore(
     {
         await using var db = CustomerContext(customerId);
         return await db.RemediationProposals.SingleOrDefaultAsync(value => value.CustomerId == customerId && value.ProposalId == proposalId, cancellationToken);
+    }
+
+    public async ValueTask<IReadOnlyList<RemediationProposal>> ListProposalsAsync(Guid customerId, RemediationProposalStatus? status, CancellationToken cancellationToken)
+    {
+        await using var db = CustomerContext(customerId);
+        var query = db.RemediationProposals.AsNoTracking().Where(value => value.CustomerId == customerId);
+        if (status is not null) query = query.Where(value => value.Status == status);
+        return await query.OrderByDescending(value => value.ProposedAt).ThenBy(value => value.ProposalId).ToArrayAsync(cancellationToken);
     }
 
     public async ValueTask SaveProposalAsync(RemediationProposal proposal, CancellationToken cancellationToken)

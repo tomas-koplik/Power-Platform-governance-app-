@@ -8,7 +8,8 @@ The Score capability is enabled only when all of these checks pass:
 
 - catalog and default profile files are present and parse successfully;
 - schema version is `1` and catalog version equals `RuleCatalog:TrustedVersion`;
-- `publicationAttestation` exactly equals `RuleCatalog:TrustedPublicationAttestation`;
+- the SHA-256 digest of `catalog.yaml.manifest.json` appears in the semicolon-separated `RuleCatalog:TrustedManifestDigests` allowlist;
+- the manifest contains SHA-256 digests for the exact catalog and profile bytes, and either byte sequence changing invalidates publication;
 - stable IDs are unique and every required rule contract field validates;
 - every evidence requirement requires `Full` section coverage;
 - the default profile contains every catalog rule with `enabled`, `disabled`, or `advisory` mode.

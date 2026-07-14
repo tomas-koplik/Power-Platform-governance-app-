@@ -5,8 +5,10 @@ namespace Ppgsm.Core.Domain;
 public sealed class SnapshotEvaluationService(
     IPublishedRuleCatalog catalog,
     IEvaluationEvidenceStore evidenceStore,
+    IPocApprovalStore pocApprovals,
     IGovernanceStore governanceStore,
-    RuleEvaluationRuntime runtime)
+    RuleEvaluationRuntime runtime,
+    TimeProvider timeProvider)
 {
     public async ValueTask<bool> EvaluateAndPersistAsync(
         Guid customerId,
@@ -27,7 +29,11 @@ public sealed class SnapshotEvaluationService(
             CreateProjection(customerId, snapshotId, sectionEvidence), cancellationToken);
         var published = await catalog.GetCurrentAsync(cancellationToken);
         if (published is null) return false;
-        var findings = runtime.Evaluate(new(customerId, snapshotId, snapshotSchemaVersion, published, sectionEvidence));
+        var approvedRuleIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tuple in payloads.Select(value => (value.Reference.PrincipalIdentityBasis, value.Reference.ApiVersion)).Distinct())
+            approvedRuleIds.UnionWith(await pocApprovals.GetApprovedRuleIdsAsync(
+                customerId, tuple.PrincipalIdentityBasis, tuple.ApiVersion, timeProvider.GetUtcNow(), cancellationToken));
+        var findings = runtime.Evaluate(new(customerId, snapshotId, snapshotSchemaVersion, published, sectionEvidence, approvedRuleIds));
         await governanceStore.ReplaceFindingsAsync(customerId, snapshotId, findings, cancellationToken);
         return true;
     }

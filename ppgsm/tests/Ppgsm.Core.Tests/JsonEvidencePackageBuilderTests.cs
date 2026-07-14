@@ -96,6 +96,19 @@ public sealed class JsonEvidencePackageBuilderTests
         Assert.Equal(EvidenceId, package.GetProperty("findings")[0].GetProperty("evidenceReferences")[0].GetProperty("evidenceId").GetGuid());
     }
 
+    [Fact]
+    public async Task Legacy_section_alias_is_exported_canonically_with_original_lineage()
+    {
+        var input = Input();
+        input = input with { RawEvidence = [Evidence() with { SectionKey = "tenant-settings" }] };
+
+        using var document = JsonDocument.Parse(await BuildAsync(input));
+        var raw = document.RootElement.GetProperty("evidencePackage").GetProperty("rawEvidence")[0];
+
+        Assert.Equal(SectionKeys.TenantSettings, raw.GetProperty("sectionKey").GetString());
+        Assert.Equal("tenant-settings", raw.GetProperty("originalSectionKey").GetString());
+    }
+
     private static async Task<string> BuildAsync(JsonEvidencePackageInput input) =>
         Encoding.UTF8.GetString(await BuildBytesAsync(input));
 
@@ -151,14 +164,15 @@ public sealed class JsonEvidencePackageBuilderTests
             new(true, 30, true, "Review"), new(RemediationKind.Manual, "Guidance", "Tenant", ["Approval"], "Verify", "Manual rollback"),
             "https://example.test/docs", new("verified", "Question"));
         return new("2026.07", Timestamp.AddDays(-1), "approved-attestation", [rule],
-            new("default", 2, [new(rule.Id, "enabled", "baseline")]));
+            new("default", 2, [new(rule.Id, "enabled", "baseline")]), "sha256:" + new string('a', 64), "{\"boolean\":7}");
     }
 
     private static Finding Finding(FindingStatus status) => new(
         Guid.Parse("99999999-9999-9999-9999-999999999991"), CustomerId, SnapshotId, "PPG-TS-001", "Tenant control", "Tenant",
         FindingSeverity.High, status, "Tenant", "Observed", "Interpretation", "Action", RemediationKind.Manual,
         RuleVersion: 4, CatalogVersion: "2026.07", EvaluatorKey: "boolean", EvaluatorVersion: 7,
-        EvidenceLinksJson: $$"""[{"evidenceId":"{{EvidenceId:D}}","path":"$.safe"}]""");
+        EvidenceLinksJson: $$"""[{"evidenceId":"{{EvidenceId:D}}","path":"$.safe"}]""",
+        PublicationContentDigest: "sha256:" + new string('a', 64), EvaluatorVersionsJson: "{\"boolean\":7}");
 
     private static RawEvidenceReference Evidence() => new(
         EvidenceId, CustomerId, SnapshotId, SectionKeys.TenantSettings, "immutable/path.json", "sha256:source", "application/json",

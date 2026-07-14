@@ -7,7 +7,7 @@ export const mockWorkspace: WorkspaceData = {
   capabilities: {
     portfolio: true, onboarding: false, connections: false, snapshots: true, evidence: true,
     findings: true, score: true, dlp: true, compare: false, exports: false,
-    exceptions: false, remediation: false, approvals: false,
+    exceptions: false, remediation: false, approvals: false, offboarding: false,
   },
   session: { displayName: "Alex Morgan", role: "Consultant", authMode: "mock" },
   customers: [{ customerId: "11111111-1111-4111-8111-111111111111", name: "Northstar Manufacturing", entraTenantId: "22222222-2222-4222-8222-222222222222", region: "West Europe", status: "Active", connection: { mode: "AppOnly", status: "Degraded", detail: "Reader RBAC coverage is unverified; app-only collection is incomplete." } }],

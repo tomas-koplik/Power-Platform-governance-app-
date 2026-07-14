@@ -50,6 +50,29 @@ All require customer-tenant admin consent. The authenticated callback token also
 
 PoC dependencies remain: confirm each configured Power Platform endpoint and API version in a disposable tenant; prove the least-privilege RBAC assignment for each endpoint/resource identity; record 200, 401/403, 404, 429, revocation, and role-removal fixtures; and confirm whether a documented non-preview API exposes Power Platform role assignments directly. Until that final API is available, directory role plus successful allowlisted app-only probes is the explicit evidence boundary, and preview-only results cannot activate a connection.
 
+## Production external consent revocation
+
+External offboarding is disabled unless `Offboarding:ExternalConsentRevocation:Enabled` is `true`. A disabled deployment returns capability unavailable from the offboarding request and approval routes. An enabled production deployment fails startup unless `ClientApplicationId` is a valid application ID and every configured Power Platform removal endpoint is an HTTPS assignment endpoint template on the fixed `api.powerplatform.com` or `api.bap.microsoft.com` allowlist with an approved resource scope. There is no legacy management-app fallback.
+
+Set `EnterpriseApplicationPolicy` explicitly to:
+
+- `Preserve` to remove delegated grants but retain the local enterprise application.
+- `Disable` to remove grants and set the verified local service principal's `accountEnabled` property to `false`.
+- `Remove` to remove grants and delete the verified local service principal.
+
+The adapter resolves the customer tenant from the durable customer record and requires Graph to uniquely resolve the configured application ID to the service-principal object ID persisted by verified onboarding. It removes every matching `oauth2PermissionGrant` with Microsoft Graph `DELETE /v1.0/oauth2PermissionGrants/{id}`. A missing grant or service principal is idempotent success only after the tenant-bound lookups are conclusive. Wrong tenant, wrong/non-unique service principal, wrong grant client, throttling exhaustion, authorization failure, or an inconclusive response fails closed before physical customer-data deletion.
+
+In addition to the verifier's read permissions, the app-only service principal requires these Microsoft Graph **application permissions**, with customer-tenant admin consent:
+
+- `DelegatedPermissionGrant.ReadWrite.All` to enumerate and delete delegated OAuth2 permission grants.
+- `Application.ReadWrite.All` to resolve and, only under the configured policy, disable or delete the local enterprise application. If policy is `Preserve`, validate whether the customer's least-privilege permission review permits retaining only the existing read permission instead.
+
+Each external response is represented by operation, endpoint, HTTP status, Microsoft request ID, and SHA-256 of the raw response. The retained consent reference is a SHA-256 over that canonical evidence manifest; tokens and response bodies are not logged or placed in the deletion certificate.
+
+Power Platform RBAC removal is automated only when onboarding has persisted the concrete assignment ID and operations has configured a verified, supported endpoint template containing `{assignmentId}` on the allowlist. The adapter uses the configured app-only Power Platform resource identity and accepts only a successful or already-absent response. The current onboarding verifier stores `verified` rather than a concrete assignment ID, so deployments using that evidence boundary receive `PendingManualAction` and offboarding does not proceed to physical deletion.
+
+For `PendingManualAction`, a customer administrator must remove the PPGSM assignment in the Power Platform admin center, capture the tenant ID, assignment/role identifier, UTC time, operator, and portal/audit request reference, and provide that evidence to the offboarding operator. Do not enable a preview, guessed, or legacy endpoint to bypass this step. After a supported endpoint and concrete assignment identity have been independently verified and configured, retry the same offboarding job; Graph grant deletion is idempotent.
+
 ## API v1 foundation
 
 - `POST /api/v1/customers` requires the server-issued `Consultant` or `InternalAdmin` application role.

@@ -31,7 +31,26 @@ public sealed record Finding(
     string CatalogVersion = "unversioned",
     string EvaluatorKey = "legacy",
     int EvaluatorVersion = 1,
-    string EvidenceLinksJson = "[]");
+    string EvidenceLinksJson = "[]",
+    string PublicationContentDigest = "legacy",
+    string EvaluatorVersionsJson = "{}");
+
+public sealed record PocApproval(
+    Guid PocApprovalId,
+    Guid CustomerId,
+    string RuleId,
+    string Identity,
+    string ApiVersion,
+    Guid EvidenceReferenceId,
+    string ApprovedBy,
+    DateTimeOffset ApprovedAt,
+    DateTimeOffset ExpiresAt)
+{
+    public bool Matches(Guid customerId, string ruleId, string identity, string apiVersion, DateTimeOffset now) =>
+        CustomerId == customerId && string.Equals(RuleId, ruleId, StringComparison.Ordinal) &&
+        string.Equals(Identity, identity, StringComparison.Ordinal) &&
+        string.Equals(ApiVersion, apiVersion, StringComparison.Ordinal) && ApprovedAt <= now && now < ExpiresAt;
+}
 
 public sealed record GovernanceScore(
     Guid CustomerId,

@@ -84,6 +84,7 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddSingleton<IGovernanceStore>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
     builder.Services.AddSingleton<IEvaluationEvidenceStore>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
     builder.Services.AddSingleton<IEvidenceProjectionStore>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
+    builder.Services.AddSingleton<IPocApprovalStore>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
     builder.Services.AddSingleton<IExportDownloadAuthorizer>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
     builder.Services.AddSingleton<IExportArtifactStore>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
     builder.Services.AddSingleton<ICustomerOffboardingStore>(provider => provider.GetRequiredService<LocalDevelopmentStore>());
@@ -120,6 +121,7 @@ else
     builder.Services.AddSingleton<IGovernanceStore>(provider => provider.GetRequiredService<SqlDurableStore>());
     builder.Services.AddSingleton<IEvaluationEvidenceStore>(provider => provider.GetRequiredService<SqlDurableStore>());
     builder.Services.AddSingleton<IEvidenceProjectionStore>(provider => provider.GetRequiredService<SqlDurableStore>());
+    builder.Services.AddSingleton<IPocApprovalStore>(provider => provider.GetRequiredService<SqlDurableStore>());
     builder.Services.AddSingleton<ISnapshotJobStore>(provider => provider.GetRequiredService<SqlDurableStore>());
     builder.Services.AddSingleton<ICustomerQueueAdapter>(provider => provider.GetRequiredService<SqlDurableStore>());
     builder.Services.AddSingleton<ICustomerOffboardingStore>(provider => provider.GetRequiredService<SqlDurableStore>());
@@ -127,18 +129,37 @@ else
 builder.Services.AddSingleton<RuleEvaluatorRegistry>();
 builder.Services.AddSingleton<RuleEvaluationRuntime>();
 builder.Services.AddSingleton<SnapshotEvaluationService>();
-builder.Services.AddSingleton<ApiCapabilityRegistry>();
 builder.Services.AddSingleton<ITrustedRemediationTemplateCatalog, BuiltInTrustedRemediationTemplateCatalog>();
+builder.Services.AddSingleton<RemediationEvidencePolicy>();
 builder.Services.AddSingleton<TrustedRemediationProposalFactory>();
 builder.Services.AddSingleton<RemediationEligibilityService>();
 builder.Services.AddSingleton<ConsentDocumentService>();
-builder.Services.AddSingleton<IExternalConsentRevocationAdapter, UnavailableExternalConsentRevocationAdapter>();
+var externalRevocationOptions = builder.Configuration.GetSection(ExternalConsentRevocationOptions.SectionName)
+    .Get<ExternalConsentRevocationOptions>() ?? new();
+externalRevocationOptions.Validate();
+builder.Services.AddSingleton(externalRevocationOptions);
+var liveExternalRevocationEnabled = !builder.Environment.IsDevelopment() && externalRevocationOptions.Enabled;
+builder.Services.AddSingleton(new OffboardingCapability(liveExternalRevocationEnabled));
+builder.Services.AddSingleton<ApiCapabilityRegistry>();
+if (liveExternalRevocationEnabled)
+{
+    builder.Services.AddHttpClient<IExternalRevocationTransport, MicrosoftExternalRevocationTransport>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("PPGSM-Offboarding/1.0");
+    }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    builder.Services.AddSingleton<IExternalConsentRevocationAdapter, ExternalConsentRevocationAdapter>();
+}
+else
+{
+    builder.Services.AddSingleton<IExternalConsentRevocationAdapter, UnavailableExternalConsentRevocationAdapter>();
+}
 builder.Services.AddSingleton<CustomerOffboardingService>();
 builder.Services.AddSingleton<IPublishedRuleCatalog>(provider => new FilePublishedRuleCatalog(
     Path.Combine(AppContext.BaseDirectory, "rules", "v1", "catalog.yaml"),
     Path.Combine(AppContext.BaseDirectory, "rules", "v1", "default-profile.yaml"),
     builder.Configuration["RuleCatalog:TrustedVersion"] ?? string.Empty,
-    builder.Configuration["RuleCatalog:TrustedPublicationAttestation"] ?? string.Empty,
+    builder.Configuration["RuleCatalog:TrustedManifestDigests"] ?? string.Empty,
     provider.GetRequiredService<RuleEvaluatorRegistry>()));
 builder.Services.AddSingleton<TenantAuthorizer>();
 builder.Services.AddSingleton(TimeProvider.System);
@@ -271,9 +292,9 @@ api.MapGet("/session/workspace", async (
             EvidenceCoverageAggregator.Aggregate(latest.Sections.Select(value => value.Coverage)));
     var role = memberships.OrderByDescending(value => value.Role).Select(value => value.Role).FirstOrDefault();
     return Results.Ok(new WorkspaceResponse(
-        new(principal.Identity?.Name ?? subject.ToString(), role, "bff"), customers, snapshots,
+        new(principal.Identity?.Name ?? subject.ToString(), role, "bff", subject.ToString()), customers, snapshots,
         new(score.Overall, score.Tier, score.Evaluated, score.Total, score.Confidence, score.Areas),
-        [], [], findings, [], capabilities.Status));
+        [], [], findings, [], capabilities.ForRole(role)));
 }).Produces<WorkspaceResponse>();
 
 api.MapPost("/customers", async (
@@ -618,9 +639,10 @@ api.MapGet("/customers/{customerId:guid}/consent-metadata", async (
 
 api.MapPost("/customers/{customerId:guid}/offboarding", async (
     Guid customerId, RequestOffboardingRequest request, ClaimsPrincipal principal, HttpContext context, ITenantMembershipStore memberships,
-    CustomerOffboardingService offboarding,
+    CustomerOffboardingService offboarding, OffboardingCapability capability,
     CancellationToken cancellationToken) =>
 {
+    capability.Require();
     var subject = principal.Subject();
     var membership = await memberships.FindAsync(subject, customerId, cancellationToken);
     if (membership?.Role is not (MembershipRole.CustomerAdmin or MembershipRole.InternalAdmin)) throw new TenantAccessDeniedException();
@@ -631,8 +653,9 @@ api.MapPost("/customers/{customerId:guid}/offboarding", async (
 
 api.MapPost("/customers/{customerId:guid}/offboarding/approve", async (
     Guid customerId, ClaimsPrincipal principal, HttpContext context, ITenantMembershipStore memberships,
-    CustomerOffboardingService offboarding, CancellationToken cancellationToken) =>
+    CustomerOffboardingService offboarding, OffboardingCapability capability, CancellationToken cancellationToken) =>
 {
+    capability.Require();
     var subject = principal.Subject();
     var membership = await memberships.FindAsync(subject, customerId, cancellationToken);
     if (membership?.Role is not (MembershipRole.CustomerAdmin or MembershipRole.InternalAdmin)) throw new TenantAccessDeniedException();
@@ -808,15 +831,33 @@ api.MapPost("/customers/{customerId:guid}/remediation/proposals", async (
     return Results.Created($"/api/v1/customers/{customerId}/remediation/proposals/{proposal.ProposalId}", await governance.AddProposalAsync(proposal, cancellationToken));
 }).Produces<RemediationProposal>(StatusCodes.Status201Created).ProducesProblem(StatusCodes.Status403Forbidden);
 
+api.MapGet("/customers/{customerId:guid}/remediation/proposals", async (
+    Guid customerId, RemediationProposalStatus? status, ClaimsPrincipal principal, HttpContext context,
+    TenantAuthorizer authorizer, IGovernanceStore governance, CancellationToken cancellationToken) =>
+{
+    var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
+    context.SetAuthorizedTenant(tenant);
+    return Results.Ok(await governance.ListProposalsAsync(customerId, status, cancellationToken));
+}).Produces<IReadOnlyList<RemediationProposal>>().ProducesProblem(StatusCodes.Status403Forbidden);
+
+api.MapGet("/customers/{customerId:guid}/remediation/proposals/{proposalId:guid}", async (
+    Guid customerId, Guid proposalId, ClaimsPrincipal principal, HttpContext context,
+    TenantAuthorizer authorizer, IGovernanceStore governance, CancellationToken cancellationToken) =>
+{
+    var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
+    context.SetAuthorizedTenant(tenant);
+    var proposal = await governance.FindProposalAsync(customerId, proposalId, cancellationToken);
+    return proposal is null ? Results.NotFound() : Results.Ok(proposal);
+}).Produces<RemediationProposal>().ProducesProblem(StatusCodes.Status403Forbidden).Produces(StatusCodes.Status404NotFound);
+
 api.MapGet("/customers/{customerId:guid}/snapshots/{snapshotId:guid}/findings/{findingId:guid}/remediation-eligibility", async (
-    Guid customerId, Guid snapshotId, Guid findingId, string evidenceHash, DateTimeOffset evidenceCapturedAt,
-    DateTimeOffset evidenceValidUntil, ClaimsPrincipal principal, HttpContext context, TenantAuthorizer authorizer,
+    Guid customerId, Guid snapshotId, Guid findingId, string evidenceHash,
+    ClaimsPrincipal principal, HttpContext context, TenantAuthorizer authorizer,
     RemediationEligibilityService eligibility, CancellationToken cancellationToken) =>
 {
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.CustomerAdmin, cancellationToken);
     context.SetAuthorizedTenant(tenant);
-    return Results.Ok(await eligibility.GetAsync(customerId, snapshotId, findingId, evidenceHash, evidenceCapturedAt,
-        evidenceValidUntil, cancellationToken));
+    return Results.Ok(await eligibility.GetAsync(customerId, snapshotId, findingId, evidenceHash, cancellationToken));
 }).Produces<RemediationEligibilityResponse>().ProducesProblem(StatusCodes.Status403Forbidden);
 
 api.MapPost("/customers/{customerId:guid}/remediation/proposals/{proposalId:guid}/review", async (

@@ -25,7 +25,7 @@ public static class TenantRlsDefinition
         "RemediationProposals", "SnapshotJobs", "CustomerLegalHolds", "CustomerDeletions", "AuditEvents"
     ];
 
-    public static IReadOnlyList<string> CurrentTenantTables => [.. TenantTables, "DlpPolicyEvidence"];
+    public static IReadOnlyList<string> CurrentTenantTables => [.. TenantTables, "DlpPolicyEvidence", "PocApprovals"];
 
     public static string Sql { get; } = BuildSql();
 

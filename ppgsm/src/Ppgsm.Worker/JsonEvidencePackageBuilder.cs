@@ -120,7 +120,10 @@ public sealed class JsonEvidencePackageBuilder(JsonEvidencePackageOptions option
         foreach (var section in snapshot.Sections.OrderBy(value => value.SectionKey, StringComparer.Ordinal))
         {
             writer.WriteStartObject();
-            writer.WriteString("sectionKey", section.SectionKey);
+            var canonicalSectionKey = SectionKeys.Canonicalize(section.SectionKey);
+            writer.WriteString("sectionKey", canonicalSectionKey);
+            if (!string.Equals(canonicalSectionKey, section.SectionKey, StringComparison.Ordinal))
+                writer.WriteString("originalSectionKey", section.SectionKey);
             writer.WriteString("coverage", section.Coverage.ToString());
             writer.WriteNumber("itemCount", section.ItemCount);
             if (section.Reason is not null) writer.WriteString("reason", section.Reason);
@@ -138,6 +141,9 @@ public sealed class JsonEvidencePackageBuilder(JsonEvidencePackageOptions option
         writer.WriteString("version", catalog.Version);
         writer.WriteString("publishedAt", catalog.PublishedAt);
         writer.WriteString("publicationAttestation", catalog.PublicationAttestation);
+        writer.WriteString("contentDigest", catalog.ContentDigest);
+        writer.WritePropertyName("evaluatorVersions");
+        using (var versions = JsonDocument.Parse(catalog.EvaluatorVersionsJson)) WriteJson(writer, versions.RootElement, includePii: false);
         writer.WriteString("profileId", catalog.DefaultProfile.Id);
         writer.WriteNumber("profileVersion", catalog.DefaultProfile.Version);
         writer.WriteEndObject();
@@ -207,6 +213,9 @@ public sealed class JsonEvidencePackageBuilder(JsonEvidencePackageOptions option
             writer.WriteString("ruleId", finding.RuleId);
             writer.WriteNumber("ruleVersion", finding.RuleVersion);
             writer.WriteString("catalogVersion", finding.CatalogVersion);
+            writer.WriteString("publicationContentDigest", finding.PublicationContentDigest);
+            writer.WritePropertyName("evaluatorVersions");
+            using (var versions = JsonDocument.Parse(finding.EvaluatorVersionsJson)) WriteJson(writer, versions.RootElement, includePii: false);
             writer.WriteString("evaluatorKey", finding.EvaluatorKey);
             writer.WriteNumber("evaluatorVersion", finding.EvaluatorVersion);
             writer.WriteString("title", finding.Title);
@@ -249,7 +258,10 @@ public sealed class JsonEvidencePackageBuilder(JsonEvidencePackageOptions option
         {
             writer.WriteStartObject();
             writer.WriteString("evidenceId", reference.RawEvidenceReferenceId);
-            writer.WriteString("sectionKey", reference.SectionKey);
+            var canonicalSectionKey = SectionKeys.Canonicalize(reference.SectionKey);
+            writer.WriteString("sectionKey", canonicalSectionKey);
+            if (!string.Equals(canonicalSectionKey, reference.SectionKey, StringComparison.Ordinal))
+                writer.WriteString("originalSectionKey", reference.SectionKey);
             writer.WriteString("contentHash", reference.ContentHash);
             writer.WriteString("mediaType", reference.MediaType);
             writer.WriteString("apiVersion", reference.ApiVersion);

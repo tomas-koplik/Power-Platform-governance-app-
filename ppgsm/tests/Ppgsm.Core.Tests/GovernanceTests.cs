@@ -201,6 +201,6 @@ public sealed class GovernanceTests
         }
         public ValueTask<PhysicalDeletionResult> DeleteTenantDataAsync(Guid customerId, CancellationToken cancellationToken) { Calls.Add("physical"); return ValueTask.FromResult(new PhysicalDeletionResult(true, "deletion-proof", new Dictionary<string, long> { ["Customers"] = 0 }, "deleted")); }
         public ValueTask CancelCustomerJobsAsync(Guid customerId, CancellationToken cancellationToken) { Calls.Add("queue"); return ValueTask.CompletedTask; }
-        public ValueTask<ExternalConsentRevocationResult> RevokeAsync(Guid customerId, CancellationToken cancellationToken) { Calls.Add("consent"); return ValueTask.FromResult(new ExternalConsentRevocationResult(ConsentSucceeds, ConsentSucceeds ? "consent-proof" : null, ConsentSucceeds ? "revoked" : "unavailable")); }
+        public ValueTask<ExternalConsentRevocationResult> RevokeAsync(Guid customerId, CancellationToken cancellationToken) { Calls.Add("consent"); return ValueTask.FromResult(new ExternalConsentRevocationResult(ConsentSucceeds ? ExternalConsentRevocationStatus.Succeeded : ExternalConsentRevocationStatus.Failed, ConsentSucceeds ? "consent-proof" : null, [], ConsentSucceeds ? "revoked" : "unavailable")); }
     }
 }

@@ -159,6 +159,7 @@ export interface Capabilities {
   exceptions: boolean;
   remediation: boolean;
   approvals: boolean;
+  offboarding: boolean;
   directExecution?: boolean;
 }
 
