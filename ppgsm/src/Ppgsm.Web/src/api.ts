@@ -1,4 +1,4 @@
-import type { ConsentCallbackInput, ConsentCallbackResult, ConsentUrl, DeletionRecord, EvidenceDocument, ExportJob, GovernanceAdapter, GovernanceException, Snapshot, SnapshotComparison, StartSnapshotInput, TenantCapability, TenantConnection, WorkspaceData } from "./domain";
+import type { ConsentCallbackInput, ConsentCallbackResult, ConsentUrl, CreateExportInput, DeletionRecord, DlpPolicyEvidence, EnvironmentEvidence, EvidenceDocument, EvidenceIndex, EvidenceMetadata, ExportJob, GovernanceAdapter, GovernanceException, ProjectedEvidence, RemediationEligibility, RemediationProposal, Snapshot, SnapshotComparison, StartSnapshotInput, TenantCapability, TenantConnection, TenantSettingEvidence, WorkspaceData } from "./domain";
 import { mockWorkspace } from "./mockData";
 import { createAuthRuntime, type AuthRuntime } from "./auth";
 
@@ -27,6 +27,18 @@ export async function request<T>(path: string, init?: RequestInit, auth = authRu
     throw new ApiProblem(problem.detail ?? problem.title ?? `Request failed (${response.status})`, response.status, problem.correlationId ?? response.headers.get("X-Correlation-ID") ?? undefined);
   }
   return response.json() as Promise<T>;
+}
+
+async function download(path: string, filename: string, auth = authRuntime ??= createAuthRuntime()): Promise<void> {
+  const accessToken = await (await auth).getAccessToken();
+  const response = await fetch(`${apiBaseUrl}${path}`, { headers: { Accept: "application/octet-stream", Authorization: `Bearer ${accessToken}` } });
+  if (!response.ok) throw new ApiProblem(`Download failed (${response.status})`, response.status, response.headers.get("X-Correlation-ID") ?? undefined);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 class LiveAdapter implements GovernanceAdapter {
@@ -58,15 +70,22 @@ class LiveAdapter implements GovernanceAdapter {
   approveOffboarding(customerId: string) { return request<DeletionRecord>(`/api/v1/customers/${customerId}/offboarding/approve`, { method: "POST" }); }
   getDeletion(customerId: string) { return request<DeletionRecord>(`/api/v1/customers/${customerId}/deletion`); }
   listSnapshots(customerId: string) { return request<Snapshot[]>(`/api/v1/customers/${customerId}/snapshots`); }
+  listEvidence(customerId: string, snapshotId: string, page: number, pageSize: number) { return request<EvidenceIndex>(`/api/v1/customers/${customerId}/snapshots/${snapshotId}/evidence?page=${page}&pageSize=${pageSize}`); }
+  getTenantSettings(customerId: string, snapshotId: string) { return request<ProjectedEvidence<TenantSettingEvidence>>(`/api/v1/customers/${customerId}/snapshots/${snapshotId}/evidence/tenant-settings`); }
+  getEnvironments(customerId: string, snapshotId: string) { return request<ProjectedEvidence<EnvironmentEvidence>>(`/api/v1/customers/${customerId}/snapshots/${snapshotId}/evidence/environments`); }
+  getDlpPolicies(customerId: string, snapshotId: string) { return request<ProjectedEvidence<DlpPolicyEvidence>>(`/api/v1/customers/${customerId}/snapshots/${snapshotId}/evidence/dlp-policies`); }
   getEvidence(customerId: string, snapshotId: string, evidenceId: string, raw = false) { return request<EvidenceDocument>(`/api/v1/customers/${customerId}/snapshots/${snapshotId}/evidence/${evidenceId}?raw=${raw}`); }
   compareSnapshots(customerId: string, baselineSnapshotId: string, currentSnapshotId: string) { return request<SnapshotComparison>(`/api/v1/customers/${customerId}/comparisons`, { method: "POST", body: JSON.stringify({ baselineSnapshotId, currentSnapshotId }) }); }
-  createExport(customerId: string) { return request<ExportJob>(`/api/v1/customers/${customerId}/exports`, { method: "POST", body: JSON.stringify({ format: "Json" }) }); }
+  createExport(customerId: string, input: CreateExportInput) { return request<ExportJob>(`/api/v1/customers/${customerId}/exports`, { method: "POST", body: JSON.stringify(input) }); }
   getExport(customerId: string, exportJobId: string) { return request<ExportJob>(`/api/v1/customers/${customerId}/exports/${exportJobId}`); }
-  async downloadExport(customerId: string, exportJobId: string) {
-    const result = await request<{ url: string }>(`/api/v1/customers/${customerId}/exports/${exportJobId}/download-url`, { method: "POST" });
-    window.location.assign(result.url);
-  }
+  downloadExport(customerId: string, exportJobId: string) { return download(`/api/v1/customers/${customerId}/exports/${exportJobId}/download`, `ppgsm-evidence-${exportJobId}.json`); }
   createException(customerId: string, findingId: string, reason: string, expiresAt: string) { return request<GovernanceException>(`/api/v1/customers/${customerId}/findings/${findingId}/exceptions`, { method: "POST", body: JSON.stringify({ reason, expiresAt }) }); }
+  getRemediationEligibility(customerId: string, snapshotId: string, findingId: string, evidence: EvidenceMetadata, evidenceValidUntil: string) {
+    const query = new URLSearchParams({ evidenceHash: evidence.contentHash, evidenceCapturedAt: evidence.capturedAt, evidenceValidUntil });
+    return request<RemediationEligibility>(`/api/v1/customers/${customerId}/snapshots/${snapshotId}/findings/${findingId}/remediation-eligibility?${query}`);
+  }
+  createRemediationProposal(customerId: string, input: { findingId: string; snapshotId: string; templateId: string; parameters: Record<string, unknown>; evidenceHash: string; targetScope: string; evidenceCapturedAt: string; evidenceValidUntil: string }) { return request<RemediationProposal>(`/api/v1/customers/${customerId}/remediation/proposals`, { method: "POST", body: JSON.stringify(input) }); }
+  reviewRemediationProposal(customerId: string, proposalId: string, approved: boolean, latestSnapshotId: string, reason?: string) { return request<RemediationProposal>(`/api/v1/customers/${customerId}/remediation/proposals/${proposalId}/review`, { method: "POST", body: JSON.stringify({ approved, reason, latestSnapshotId }) }); }
 }
 
 class MockAdapter implements GovernanceAdapter {
@@ -96,12 +115,19 @@ class MockAdapter implements GovernanceAdapter {
   async approveOffboarding(): Promise<DeletionRecord> { return this.unavailable(); }
   async getDeletion(): Promise<DeletionRecord> { return this.unavailable(); }
   async listSnapshots(): Promise<Snapshot[]> { return structuredClone(mockWorkspace.snapshots); }
+  async listEvidence(): Promise<EvidenceIndex> { return this.unavailable(); }
+  async getTenantSettings(): Promise<ProjectedEvidence<TenantSettingEvidence>> { return this.unavailable(); }
+  async getEnvironments(): Promise<ProjectedEvidence<EnvironmentEvidence>> { return this.unavailable(); }
+  async getDlpPolicies(): Promise<ProjectedEvidence<DlpPolicyEvidence>> { return this.unavailable(); }
   async getEvidence(): Promise<EvidenceDocument> { return this.unavailable(); }
   async compareSnapshots(): Promise<SnapshotComparison> { return this.unavailable(); }
   async createExport(): Promise<ExportJob> { return this.unavailable(); }
   async getExport(): Promise<ExportJob> { return this.unavailable(); }
   async downloadExport(): Promise<void> { return this.unavailable(); }
   async createException(): Promise<GovernanceException> { return this.unavailable(); }
+  async getRemediationEligibility(): Promise<RemediationEligibility> { return this.unavailable(); }
+  async createRemediationProposal(): Promise<RemediationProposal> { return this.unavailable(); }
+  async reviewRemediationProposal(): Promise<RemediationProposal> { return this.unavailable(); }
 }
 
 const adapterMode = runtimeConfig.dataAdapter ?? import.meta.env.VITE_DATA_ADAPTER;

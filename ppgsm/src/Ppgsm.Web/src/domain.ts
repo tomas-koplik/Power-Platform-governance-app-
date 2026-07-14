@@ -159,6 +159,7 @@ export interface Capabilities {
   exceptions: boolean;
   remediation: boolean;
   approvals: boolean;
+  directExecution?: boolean;
 }
 
 export interface SnapshotComparison {
@@ -175,14 +176,91 @@ export interface ExportJob {
   format: "Pdf" | "Xlsx" | "Json";
   status: "Queued" | "Running" | "Completed" | "Failed";
   createdAt: string;
-  downloadUrl?: string;
+  snapshotId: string;
+  includesPii: boolean;
+  updatedAt?: string;
+  downloadExpiresAt?: string;
+  artifactContentHash?: string;
+  artifactContentLength?: number;
+  artifactMediaType?: string;
   failureReason?: string;
 }
+export interface CreateExportInput { snapshotId: string; format: "Json"; includePii: boolean }
 export interface EvidenceDocument {
   rawEvidenceReferenceId: string;
   sectionKey: string;
   mediaType: string;
   content: unknown;
+}
+export type EvidenceConfidence = "Verified" | "High" | "Medium" | "Low" | "PocRequired";
+export interface EvidenceMetadata {
+  evidenceId: string;
+  section: string;
+  mediaType: string;
+  contentHash: string;
+  capturedAt: string;
+  confidence: EvidenceConfidence;
+  pageNumber: number;
+  collectorId: string;
+  collectorVersion: string;
+  parserSchemaVersion: string;
+  completenessRationale: string;
+}
+export interface EvidenceIndex {
+  snapshotId: string;
+  coverage: Coverage;
+  confidence: EvidenceConfidence;
+  evidenceIds: string[];
+  items: EvidenceMetadata[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+export interface ProjectedEvidence<T> {
+  snapshotId: string;
+  state: "Complete" | "Partial" | "Unavailable";
+  coverage: Coverage;
+  confidence: EvidenceConfidence;
+  evidenceIds: string[];
+  items: T[];
+  detail: string;
+}
+export interface TenantSettingEvidence { key: string; value: boolean | null; evidenceId: string }
+export interface EnvironmentEvidence { id: string; displayName: string; type: string; region: string; isDefault: boolean; isManaged: boolean; protectionLevel?: string; hasDataverse: boolean; securityGroupId?: string; evidenceId: string }
+export interface DlpPolicyEvidence { id: string; displayName: string; properties: Record<string, unknown>; evidenceId: string }
+export interface RemediationEligibility {
+  eligible: boolean;
+  reason?: string;
+  findingId: string;
+  snapshotId: string;
+  ruleId?: string;
+  ruleVersion?: number;
+  catalogVersion?: string;
+  templateId?: string;
+  templateVersion?: number;
+  allowedParameters: string[];
+  evidenceCapturedAt: string;
+  evidenceValidUntil: string;
+  target: string;
+  verification: string;
+  rollback: string;
+}
+export interface RemediationProposal {
+  proposalId: string;
+  customerId: string;
+  findingId: string;
+  snapshotId: string;
+  proposedBy: string;
+  proposedAt: string;
+  evidenceValidUntil: string;
+  templateId: string;
+  targetScope: string;
+  verification: string;
+  rollback: string;
+  status: "Proposed" | "Approved" | "Rejected";
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewReason?: string;
 }
 export interface GovernanceException {
   exceptionId: string;
@@ -215,12 +293,19 @@ export interface GovernanceAdapter {
   approveOffboarding(customerId: string): Promise<DeletionRecord>;
   getDeletion(customerId: string): Promise<DeletionRecord>;
   listSnapshots(customerId: string): Promise<Snapshot[]>;
+  listEvidence(customerId: string, snapshotId: string, page: number, pageSize: number): Promise<EvidenceIndex>;
+  getTenantSettings(customerId: string, snapshotId: string): Promise<ProjectedEvidence<TenantSettingEvidence>>;
+  getEnvironments(customerId: string, snapshotId: string): Promise<ProjectedEvidence<EnvironmentEvidence>>;
+  getDlpPolicies(customerId: string, snapshotId: string): Promise<ProjectedEvidence<DlpPolicyEvidence>>;
   getEvidence(customerId: string, snapshotId: string, evidenceId: string, raw?: boolean): Promise<EvidenceDocument>;
   compareSnapshots(customerId: string, baselineSnapshotId: string, currentSnapshotId: string): Promise<SnapshotComparison>;
-  createExport(customerId: string): Promise<ExportJob>;
+  createExport(customerId: string, input: CreateExportInput): Promise<ExportJob>;
   getExport(customerId: string, exportJobId: string): Promise<ExportJob>;
   downloadExport(customerId: string, exportJobId: string): Promise<void>;
   createException(customerId: string, findingId: string, reason: string, expiresAt: string): Promise<GovernanceException>;
+  getRemediationEligibility(customerId: string, snapshotId: string, findingId: string, evidence: EvidenceMetadata, evidenceValidUntil: string): Promise<RemediationEligibility>;
+  createRemediationProposal(customerId: string, input: { findingId: string; snapshotId: string; templateId: string; parameters: Record<string, unknown>; evidenceHash: string; targetScope: string; evidenceCapturedAt: string; evidenceValidUntil: string }): Promise<RemediationProposal>;
+  reviewRemediationProposal(customerId: string, proposalId: string, approved: boolean, latestSnapshotId: string, reason?: string): Promise<RemediationProposal>;
 }
 
 export const canViewPii = (role: Role) => role === "CustomerAdmin" || role === "Consultant" || role === "InternalAdmin";
