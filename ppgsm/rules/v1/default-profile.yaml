@@ -1,0 +1,12 @@
+{
+  "id": "default",
+  "version": 1,
+  "rules": [
+    { "ruleId": "PPG-TEN-006", "mode": "advisory", "reason": "Customer production provisioning policy is not assumed." },
+    { "ruleId": "PPG-DLP-002", "mode": "enabled", "reason": "Evaluator still requires Full environment and DLP evidence; otherwise NotEvaluated." },
+    { "ruleId": "PPG-ENV-002", "mode": "disabled", "reason": "Machine-readable production classification and managed state remain a PoC gate." },
+    { "ruleId": "PPG-SHR-001", "mode": "disabled", "reason": "Requires complete role assignments and an enabled customer sharing profile." },
+    { "ruleId": "PPG-SHR-002", "mode": "advisory", "reason": "Owner enrichment coverage must be Full; Unresolved is never treated as orphaned." },
+    { "ruleId": "PPG-AI-001", "mode": "advisory", "reason": "No universal target value is asserted." }
+  ]
+}

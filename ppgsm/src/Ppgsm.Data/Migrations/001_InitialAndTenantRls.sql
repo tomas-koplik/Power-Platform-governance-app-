@@ -1,0 +1,1 @@
+-- Superseded. Tenant RLS is applied only by EF migration 202607140006_ConsolidatedTenantRls.

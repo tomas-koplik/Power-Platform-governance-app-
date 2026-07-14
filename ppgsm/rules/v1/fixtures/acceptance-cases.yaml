@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    { "name": "pass-full-evidence", "ruleId": "PPG-DLP-002", "profileMode": "enabled", "evidenceCoverage": "Full", "measured": 1.0, "expectedStatus": "Pass", "scored": true },
+    { "name": "fail-authoritative-value", "ruleId": "PPG-TEN-006", "profileMode": "enabled", "evidenceCoverage": "Full", "observed": false, "expectedStatus": "Fail", "scored": true },
+    { "name": "partial-measured-ratio", "ruleId": "PPG-DLP-002", "profileMode": "enabled", "evidenceCoverage": "Full", "measured": 0.75, "expectedStatus": "Partial", "evaluatorRatio": 0.75, "scored": true },
+    { "name": "not-evaluated-partial-evidence", "ruleId": "PPG-DLP-002", "profileMode": "enabled", "evidenceCoverage": "Partial", "expectedStatus": "NotEvaluated", "scored": false },
+    { "name": "not-evaluated-unresolved-owner", "ruleId": "PPG-SHR-002", "profileMode": "enabled", "evidenceCoverage": "Full", "ownerStatus": "Unresolved", "expectedStatus": "NotEvaluated", "scored": false },
+    { "name": "fail-disabled-owner", "ruleId": "PPG-SHR-002", "profileMode": "enabled", "evidenceCoverage": "Full", "ownerStatus": "Disabled", "expectedStatus": "Fail", "scored": true },
+    { "name": "fail-owner-not-found", "ruleId": "PPG-SHR-002", "profileMode": "enabled", "evidenceCoverage": "Full", "ownerStatus": "NotFound", "expectedStatus": "Fail", "scored": true },
+    { "name": "not-applicable-no-production", "ruleId": "PPG-ENV-002", "profileMode": "enabled", "evidenceCoverage": "Full", "productionEnvironmentCount": 0, "expectedStatus": "NotApplicable", "scored": false },
+    { "name": "excepted-active-approval", "ruleId": "PPG-TEN-006", "profileMode": "enabled", "evidenceCoverage": "Full", "observed": false, "activeException": true, "expectedStatus": "Excepted", "scored": false },
+    { "name": "advisory-ai", "ruleId": "PPG-AI-001", "profileMode": "advisory", "evidenceCoverage": "Full", "expectedStatus": "NotEvaluated", "scored": false }
+  ]
+}

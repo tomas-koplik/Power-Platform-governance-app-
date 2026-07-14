@@ -1,0 +1,17 @@
+# App output files — ignored wherever they appear
+**/index.html
+**/style.css
+**/app.js
+!index.html
+!style.css
+!app.js
+
+# Internal workshop system files
+.github/agents/workshop-system-designer.agent.md
+
+# Workshop task definition
+!.vscode/
+!.vscode/tasks.json
+
+# macOS
+.DS_Store

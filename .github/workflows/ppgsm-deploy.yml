@@ -1,0 +1,397 @@
+name: PPGSM Deploy and Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub environment and Azure stage
+        required: true
+        type: choice
+        options: [dev, test, staging, prod]
+      action:
+        description: Deploy a digest or roll API traffic back to a retained revision
+        required: true
+        default: deploy
+        type: choice
+        options: [deploy, rollback]
+      source_sha:
+        description: CI commit SHA that produced the images
+        required: true
+        type: string
+      api_digest:
+        description: API sha256 digest from PPGSM CI
+        required: false
+        type: string
+      worker_digest:
+        description: Worker sha256 digest from PPGSM CI
+        required: false
+        type: string
+      web_digest:
+        description: Web sha256 digest from PPGSM CI
+        required: false
+        type: string
+      run_migration:
+        description: Execute and require success from the controlled migration job
+        required: true
+        default: false
+        type: boolean
+      rollback_revision:
+        description: Existing API revision name for rollback action
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  packages: read
+
+concurrency:
+  group: ppgsm-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AZURE_CORE_ONLY_SHOW_ERRORS: 'true'
+  RESOURCE_GROUP: rg-ppgsm-${{ inputs.environment }}
+  NAME_PREFIX: ppgsm-${{ inputs.environment }}
+
+jobs:
+  validate-inputs:
+    name: Validate release inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce immutable digest and rollback inputs
+        shell: bash
+        env:
+          ACTION: ${{ inputs.action }}
+          API_DIGEST: ${{ inputs.api_digest }}
+          WORKER_DIGEST: ${{ inputs.worker_digest }}
+          WEB_DIGEST: ${{ inputs.web_digest }}
+          ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
+        run: |
+          set -euo pipefail
+          digest_pattern='^sha256:[a-f0-9]{64}$'
+          if [[ "$ACTION" == 'deploy' ]]; then
+            [[ "$API_DIGEST" =~ $digest_pattern ]]
+            [[ "$WORKER_DIGEST" =~ $digest_pattern ]]
+            [[ "$WEB_DIGEST" =~ $digest_pattern ]]
+            if [[ '${{ inputs.environment }}' == 'prod' && '${{ inputs.run_migration }}' != 'true' ]]; then
+              echo 'Production deployment requires the controlled migration gate.' >&2
+              exit 1
+            fi
+          else
+            test -n "$ROLLBACK_REVISION"
+          fi
+
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    if: inputs.action == 'deploy'
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    environment: ppgsm-${{ inputs.environment }}
+    outputs:
+      api_url: ${{ steps.deploy.outputs.apiUrl }}
+      api_name: ${{ steps.deploy.outputs.apiName }}
+      web_url: ${{ steps.deploy.outputs.webUrl }}
+      migration_job: ${{ steps.deploy.outputs.migrationJobName }}
+      candidate_revision: ${{ steps.candidate.outputs.revision }}
+      candidate_url: ${{ steps.candidate.outputs.url }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Reject non-durable production runtime
+        if: inputs.environment == 'prod'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number -E 'AddSingleton<(LocalDevelopmentStore|LocalCollectorRuntimeStore|InMemoryOnboardingStateReplayStore)|GetRequiredService<(LocalDevelopmentStore|LocalCollectorRuntimeStore)>' ppgsm/src/Ppgsm.Api ppgsm/src/Ppgsm.Worker; then
+            echo 'Production is blocked: API or worker still registers Local/InMemory runtime adapters.' >&2
+            exit 1
+          fi
+      - name: Require locked frontend release dependencies
+        shell: bash
+        run: test -f ppgsm/src/Ppgsm.Web/package-lock.json
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Install Bicep CLI
+        shell: bash
+        run: az bicep install
+      - name: Validate tenant-neutral configuration
+        shell: bash
+        env:
+          SQL_ADMIN_OBJECT_ID: ${{ vars.PPGSM_SQL_ADMIN_OBJECT_ID }}
+          SQL_ADMIN_LOGIN: ${{ vars.PPGSM_SQL_ADMIN_LOGIN }}
+          AUTHORITY: ${{ vars.PPGSM_AUTHORITY }}
+          AUDIENCE: ${{ vars.PPGSM_AUDIENCE }}
+          API_CLIENT_ID: ${{ vars.PPGSM_API_CLIENT_ID }}
+          SPA_CLIENT_IDS: ${{ vars.PPGSM_AUTHORIZED_SPA_CLIENT_IDS_JSON }}
+          API_SCOPE: ${{ vars.PPGSM_API_SCOPE }}
+          CONSENT_CALLBACK_URI: ${{ vars.PPGSM_CONSENT_CALLBACK_URI }}
+          ONBOARDING_WEB_CLIENT_ID: ${{ vars.PPGSM_ONBOARDING_WEB_CLIENT_ID }}
+          ONBOARDING_SIGNING_SECRET_URI: ${{ vars.PPGSM_ONBOARDING_SIGNING_SECRET_URI }}
+          RULE_CATALOG_VERSION: ${{ vars.PPGSM_RULE_CATALOG_VERSION }}
+          RULE_CATALOG_ATTESTATION: ${{ vars.PPGSM_RULE_CATALOG_ATTESTATION }}
+          GRAPH_VERIFIER_BASE_URI: ${{ vars.PPGSM_GRAPH_VERIFIER_BASE_URI }}
+          GRAPH_VERIFIER_SCOPES: ${{ vars.PPGSM_GRAPH_VERIFIER_SCOPES_JSON }}
+          CORS_ALLOWED_ORIGINS: ${{ vars.PPGSM_CORS_ALLOWED_ORIGINS_JSON }}
+          OWNER_TAG: ${{ vars.PPGSM_OWNER_TAG }}
+          COST_CENTER: ${{ vars.PPGSM_COST_CENTER }}
+          ALERT_EMAIL: ${{ vars.PPGSM_ALERT_EMAIL }}
+        run: |
+          set -euo pipefail
+          test -n "$SQL_ADMIN_OBJECT_ID"
+          test -n "$SQL_ADMIN_LOGIN"
+          test -n "$AUTHORITY"
+          test -n "$AUDIENCE"
+          test -n "$API_CLIENT_ID"
+          jq -e 'type == "array" and length > 0' <<< "$SPA_CLIENT_IDS"
+          test -n "$API_SCOPE"
+          test -n "$CONSENT_CALLBACK_URI"
+          test -n "$ONBOARDING_WEB_CLIENT_ID"
+          test -n "$ONBOARDING_SIGNING_SECRET_URI"
+          test -n "$RULE_CATALOG_VERSION"
+          test -n "$RULE_CATALOG_ATTESTATION"
+          test -n "$GRAPH_VERIFIER_BASE_URI"
+          jq -e 'type == "array" and length > 0' <<< "$GRAPH_VERIFIER_SCOPES"
+          jq -e 'type == "array" and length > 0' <<< "$CORS_ALLOWED_ORIGINS"
+          test -n "$OWNER_TAG"
+          test -n "$COST_CENTER"
+          test -n "$ALERT_EMAIL"
+      - id: bootstrap
+        name: Bootstrap resource group, identities, and registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          output=$(az deployment sub create \
+            --name "ppgsm-${{ inputs.environment }}-bootstrap-${GITHUB_RUN_ID}" \
+            --location '${{ vars.PPGSM_DEPLOYMENT_LOCATION }}' \
+            --template-file ppgsm/infra/bootstrap.bicep \
+            --parameters environmentName='${{ inputs.environment }}' \
+                         location='${{ vars.PPGSM_DEPLOYMENT_LOCATION }}' \
+                         ownerTag='${{ vars.PPGSM_OWNER_TAG }}' \
+                         costCenterTag='${{ vars.PPGSM_COST_CENTER }}' \
+            --query properties.outputs -o json)
+          echo "registryName=$(jq -r '.registryName.value' <<< "$output")" >> "$GITHUB_OUTPUT"
+          echo "registryLoginServer=$(jq -r '.registryLoginServer.value' <<< "$output")" >> "$GITHUB_OUTPUT"
+      - name: Import CI images by digest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_NAME: ${{ steps.bootstrap.outputs.registryName }}
+          API_DIGEST: ${{ inputs.api_digest }}
+          WORKER_DIGEST: ${{ inputs.worker_digest }}
+          WEB_DIGEST: ${{ inputs.web_digest }}
+        run: |
+          set -euo pipefail
+          owner=$(tr '[:upper:]' '[:lower:]' <<< '${{ github.repository_owner }}')
+          az acr import --name "$REGISTRY_NAME" --source "ghcr.io/${owner}/ppgsm-api@${API_DIGEST}" --image "ppgsm-api@${API_DIGEST}" --username '${{ github.actor }}' --password "$GH_TOKEN" --force
+          az acr import --name "$REGISTRY_NAME" --source "ghcr.io/${owner}/ppgsm-worker@${WORKER_DIGEST}" --image "ppgsm-worker@${WORKER_DIGEST}" --username '${{ github.actor }}' --password "$GH_TOKEN" --force
+          az acr import --name "$REGISTRY_NAME" --source "ghcr.io/${owner}/ppgsm-web@${WEB_DIGEST}" --image "ppgsm-web@${WEB_DIGEST}" --username '${{ github.actor }}' --password "$GH_TOKEN" --force
+      - id: stable
+        name: Capture currently stable API revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(az containerapp revision list --resource-group "$RESOURCE_GROUP" --name "${NAME_PREFIX}-api" --query "[?properties.trafficWeight > \`0\`].name | [0]" -o tsv 2>/dev/null || true)
+          echo "revision=${revision}" >> "$GITHUB_OUTPUT"
+      - name: What-if
+        shell: bash
+        env:
+          REGISTRY_SERVER: ${{ steps.bootstrap.outputs.registryLoginServer }}
+        run: |
+          set -euo pipefail
+          az deployment sub what-if \
+            --name "ppgsm-${{ inputs.environment }}-whatif-${GITHUB_RUN_ID}" \
+            --location '${{ vars.PPGSM_DEPLOYMENT_LOCATION }}' \
+            --template-file ppgsm/infra/main.bicep \
+            --parameters "ppgsm/infra/environments/${{ inputs.environment }}.bicepparam" \
+                         ownerTag='${{ vars.PPGSM_OWNER_TAG }}' \
+                         costCenterTag='${{ vars.PPGSM_COST_CENTER }}' \
+                         sqlEntraAdminLogin='${{ vars.PPGSM_SQL_ADMIN_LOGIN }}' \
+                         sqlEntraAdminObjectId='${{ vars.PPGSM_SQL_ADMIN_OBJECT_ID }}' \
+                         authenticationAuthority='${{ vars.PPGSM_AUTHORITY }}' \
+                         authenticationAudience='${{ vars.PPGSM_AUDIENCE }}' \
+                         authenticationClientId='${{ vars.PPGSM_API_CLIENT_ID }}' \
+                         authenticationScope='${{ vars.PPGSM_API_SCOPE }}' \
+                         authorizedSpaClientIds='${{ vars.PPGSM_AUTHORIZED_SPA_CLIENT_IDS_JSON }}' \
+                         onboardingWebClientId='${{ vars.PPGSM_ONBOARDING_WEB_CLIENT_ID }}' \
+                         onboardingConsentCallbackUri='${{ vars.PPGSM_CONSENT_CALLBACK_URI }}' \
+                         onboardingSigningSecretUri='${{ vars.PPGSM_ONBOARDING_SIGNING_SECRET_URI }}' \
+                         trustedRuleCatalogVersion='${{ vars.PPGSM_RULE_CATALOG_VERSION }}' \
+                         trustedRuleCatalogAttestation='${{ vars.PPGSM_RULE_CATALOG_ATTESTATION }}' \
+                         graphVerifierBaseUri='${{ vars.PPGSM_GRAPH_VERIFIER_BASE_URI }}' \
+                         graphVerifierScopes='${{ vars.PPGSM_GRAPH_VERIFIER_SCOPES_JSON }}' \
+                         corsAllowedOrigins='${{ vars.PPGSM_CORS_ALLOWED_ORIGINS_JSON }}' \
+                         alertEmail='${{ vars.PPGSM_ALERT_EMAIL }}' \
+                         apiImage="${REGISTRY_SERVER}/ppgsm-api@${{ inputs.api_digest }}" \
+                         workerImage="${REGISTRY_SERVER}/ppgsm-worker@${{ inputs.worker_digest }}" \
+                         webImage="${REGISTRY_SERVER}/ppgsm-web@${{ inputs.web_digest }}" \
+                         migrationImage="${REGISTRY_SERVER}/ppgsm-worker@${{ inputs.worker_digest }}" \
+                         stableRevisionName='${{ steps.stable.outputs.revision }}' \
+                         customDomainName='${{ vars.PPGSM_CUSTOM_DOMAIN }}' \
+                         certificateKeyVaultSecretId='${{ vars.PPGSM_CERTIFICATE_SECRET_ID }}'
+      - id: deploy
+        name: Deploy immutable release
+        shell: bash
+        env:
+          REGISTRY_SERVER: ${{ steps.bootstrap.outputs.registryLoginServer }}
+        run: |
+          set -euo pipefail
+          output=$(az deployment sub create \
+            --name "ppgsm-${{ inputs.environment }}-${GITHUB_RUN_ID}" \
+            --location '${{ vars.PPGSM_DEPLOYMENT_LOCATION }}' \
+            --template-file ppgsm/infra/main.bicep \
+            --parameters "ppgsm/infra/environments/${{ inputs.environment }}.bicepparam" \
+                         ownerTag='${{ vars.PPGSM_OWNER_TAG }}' \
+                         costCenterTag='${{ vars.PPGSM_COST_CENTER }}' \
+                         sqlEntraAdminLogin='${{ vars.PPGSM_SQL_ADMIN_LOGIN }}' \
+                         sqlEntraAdminObjectId='${{ vars.PPGSM_SQL_ADMIN_OBJECT_ID }}' \
+                         authenticationAuthority='${{ vars.PPGSM_AUTHORITY }}' \
+                         authenticationAudience='${{ vars.PPGSM_AUDIENCE }}' \
+                         authenticationClientId='${{ vars.PPGSM_API_CLIENT_ID }}' \
+                         authenticationScope='${{ vars.PPGSM_API_SCOPE }}' \
+                         authorizedSpaClientIds='${{ vars.PPGSM_AUTHORIZED_SPA_CLIENT_IDS_JSON }}' \
+                         onboardingWebClientId='${{ vars.PPGSM_ONBOARDING_WEB_CLIENT_ID }}' \
+                         onboardingConsentCallbackUri='${{ vars.PPGSM_CONSENT_CALLBACK_URI }}' \
+                         onboardingSigningSecretUri='${{ vars.PPGSM_ONBOARDING_SIGNING_SECRET_URI }}' \
+                         trustedRuleCatalogVersion='${{ vars.PPGSM_RULE_CATALOG_VERSION }}' \
+                         trustedRuleCatalogAttestation='${{ vars.PPGSM_RULE_CATALOG_ATTESTATION }}' \
+                         graphVerifierBaseUri='${{ vars.PPGSM_GRAPH_VERIFIER_BASE_URI }}' \
+                         graphVerifierScopes='${{ vars.PPGSM_GRAPH_VERIFIER_SCOPES_JSON }}' \
+                         corsAllowedOrigins='${{ vars.PPGSM_CORS_ALLOWED_ORIGINS_JSON }}' \
+                         alertEmail='${{ vars.PPGSM_ALERT_EMAIL }}' \
+                         apiImage="${REGISTRY_SERVER}/ppgsm-api@${{ inputs.api_digest }}" \
+                         workerImage="${REGISTRY_SERVER}/ppgsm-worker@${{ inputs.worker_digest }}" \
+                         webImage="${REGISTRY_SERVER}/ppgsm-web@${{ inputs.web_digest }}" \
+                         migrationImage="${REGISTRY_SERVER}/ppgsm-worker@${{ inputs.worker_digest }}" \
+                         stableRevisionName='${{ steps.stable.outputs.revision }}' \
+                         customDomainName='${{ vars.PPGSM_CUSTOM_DOMAIN }}' \
+                         certificateKeyVaultSecretId='${{ vars.PPGSM_CERTIFICATE_SECRET_ID }}' \
+            --query properties.outputs -o json)
+          echo "apiUrl=$(jq -r '.apiUrl.value' <<< "$output")" >> "$GITHUB_OUTPUT"
+          echo "apiName=$(jq -r '.apiName.value' <<< "$output")" >> "$GITHUB_OUTPUT"
+          echo "webUrl=$(jq -r '.webUrl.value' <<< "$output")" >> "$GITHUB_OUTPUT"
+          echo "migrationJobName=$(jq -r '.migrationJobName.value' <<< "$output")" >> "$GITHUB_OUTPUT"
+      - name: Execute controlled migration
+        if: inputs.run_migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          execution=$(az containerapp job start --resource-group "$RESOURCE_GROUP" --name '${{ steps.deploy.outputs.migrationJobName }}' --query name -o tsv)
+          for attempt in {1..60}; do
+            status=$(az containerapp job execution show --resource-group "$RESOURCE_GROUP" --name '${{ steps.deploy.outputs.migrationJobName }}' --job-execution-name "$execution" --query properties.status -o tsv)
+            case "$status" in
+              Succeeded) exit 0 ;;
+              Failed) exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo 'Migration execution did not complete within ten minutes.' >&2
+          exit 1
+      - id: candidate
+        name: Identify and health check candidate revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(az containerapp revision list --resource-group "$RESOURCE_GROUP" --name '${{ steps.deploy.outputs.apiName }}' --query 'sort_by(@, &properties.createdTime)[-1].name' -o tsv)
+          fqdn=$(az containerapp revision show --resource-group "$RESOURCE_GROUP" --name '${{ steps.deploy.outputs.apiName }}' --revision "$revision" --query properties.fqdn -o tsv)
+          curl --fail --silent --show-error --retry 6 --retry-delay 10 "https://${fqdn}/health/live"
+          curl --fail --silent --show-error --retry 6 --retry-delay 10 '${{ steps.deploy.outputs.webUrl }}/healthz'
+          echo "revision=${revision}" >> "$GITHUB_OUTPUT"
+          echo "url=https://${fqdn}" >> "$GITHUB_OUTPUT"
+      - name: Capture deployment evidence
+        shell: bash
+        run: |
+          mkdir -p deployment-evidence
+          az containerapp revision list --resource-group "$RESOURCE_GROUP" --name '${{ steps.deploy.outputs.apiName }}' -o json > deployment-evidence/api-revisions.json
+          az resource list --resource-group "$RESOURCE_GROUP" -o json > deployment-evidence/resources.json
+          az deployment sub show --name "ppgsm-${{ inputs.environment }}-${GITHUB_RUN_ID}" -o json > deployment-evidence/deployment.json
+          printf '%s\n' '${{ inputs.api_digest }}' > deployment-evidence/api.digest
+          printf '%s\n' '${{ inputs.worker_digest }}' > deployment-evidence/worker.digest
+          printf '%s\n' '${{ inputs.web_digest }}' > deployment-evidence/web.digest
+          printf '%s\n' '${{ steps.deploy.outputs.webUrl }}' > deployment-evidence/web.url
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ppgsm-${{ inputs.environment }}-deployment-${{ github.run_id }}
+          path: deployment-evidence
+          retention-days: 90
+
+  authenticated-smoke:
+    name: Authenticated post-deploy contracts
+    if: inputs.action == 'deploy'
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: ppgsm-${{ inputs.environment }}-post-deploy
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Verify JWT, persistence, RLS, ownership, audit, revocation, and deletion
+        shell: bash
+        env:
+          PPGSM_API_URL: ${{ needs.deploy.outputs.candidate_url }}
+          PPGSM_SMOKE_PRIMARY_TOKEN: ${{ secrets.PPGSM_SMOKE_PRIMARY_TOKEN }}
+          PPGSM_SMOKE_SECONDARY_TOKEN: ${{ secrets.PPGSM_SMOKE_SECONDARY_TOKEN }}
+          PPGSM_SMOKE_CUSTOMER_ID: ${{ vars.PPGSM_SMOKE_CUSTOMER_ID }}
+          PPGSM_SMOKE_SNAPSHOT_ID: ${{ vars.PPGSM_SMOKE_SNAPSHOT_ID }}
+          PPGSM_SMOKE_EVIDENCE_ID: ${{ vars.PPGSM_SMOKE_EVIDENCE_ID }}
+          PPGSM_SMOKE_EXPORT_ID: ${{ vars.PPGSM_SMOKE_EXPORT_ID }}
+          PPGSM_SMOKE_AUDIT_URL: ${{ vars.PPGSM_SMOKE_AUDIT_URL }}
+          PPGSM_SMOKE_REVOCATION_URL: ${{ vars.PPGSM_SMOKE_REVOCATION_URL }}
+          PPGSM_SMOKE_DELETION_URL: ${{ vars.PPGSM_SMOKE_DELETION_URL }}
+          PPGSM_SMOKE_REVOCATION_BODY: ${{ secrets.PPGSM_SMOKE_REVOCATION_BODY }}
+          PPGSM_SMOKE_DELETION_BODY: ${{ secrets.PPGSM_SMOKE_DELETION_BODY }}
+        run: bash ppgsm/scripts/post-deploy-smoke.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ppgsm-${{ inputs.environment }}-smoke-${{ github.run_id }}
+          path: deployment-evidence/smoke
+          retention-days: 90
+
+  promote:
+    name: Promote validated candidate
+    if: inputs.action == 'deploy'
+    needs: [deploy, authenticated-smoke]
+    runs-on: ubuntu-latest
+    environment: ppgsm-${{ inputs.environment }}
+    steps:
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Move stable traffic to validated revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp revision label add --resource-group "$RESOURCE_GROUP" --name '${{ needs.deploy.outputs.api_name }}' --revision '${{ needs.deploy.outputs.candidate_revision }}' --label stable --yes
+          az containerapp ingress traffic set --resource-group "$RESOURCE_GROUP" --name '${{ needs.deploy.outputs.api_name }}' --label-weight stable=100
+          curl --fail --silent --show-error --retry 6 --retry-delay 10 '${{ needs.deploy.outputs.api_url }}/health/live'
+
+  rollback:
+    name: Roll back ${{ inputs.environment }} API traffic
+    if: inputs.action == 'rollback'
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    environment: ppgsm-${{ inputs.environment }}
+    steps:
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify and restore retained revision
+        shell: bash
+        env:
+          REVISION: ${{ inputs.rollback_revision }}
+        run: |
+          set -euo pipefail
+          az containerapp revision show --resource-group "$RESOURCE_GROUP" --name "${NAME_PREFIX}-api" --revision "$REVISION" --output none
+          az containerapp revision activate --resource-group "$RESOURCE_GROUP" --name "${NAME_PREFIX}-api" --revision "$REVISION"
+          az containerapp ingress traffic set --resource-group "$RESOURCE_GROUP" --name "${NAME_PREFIX}-api" --revision-weight "$REVISION=100"
+          fqdn=$(az containerapp show --resource-group "$RESOURCE_GROUP" --name "${NAME_PREFIX}-api" --query properties.configuration.ingress.fqdn -o tsv)
+          curl --fail --silent --show-error --retry 6 --retry-delay 10 "https://${fqdn}/health/live"

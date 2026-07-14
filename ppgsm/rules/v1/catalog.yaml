@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "1.0.0",
+  "publishedAt": "2026-07-14T00:00:00Z",
+  "publicationAttestation": "ppgsm-rules-1.0.0-reviewed-20260714",
+  "rules": [
+    {
+      "id": "PPG-TEN-006", "version": 1, "title": "Production environment creation is restricted", "area": "TenantSettings", "severity": "Low", "areaWeight": 1.0,
+      "applicability": { "mode": "customerProfile", "profileKey": "restrictProductionEnvironmentCreation" },
+      "evaluator": { "key": "tenant.settingEquals", "version": 1, "params": { "path": "tenantSettings.disableEnvironmentCreationByNonAdminUsers", "expected": true } },
+      "minSnapshotSchema": 1,
+      "evidenceRequirements": [{ "section": "tenantSettings", "coverage": "Full", "confidence": "Documented", "paths": ["tenantSettings.disableEnvironmentCreationByNonAdminUsers"] }],
+      "rationale": "Restricting non-admin production creation can reduce unmanaged production sprawl, but the desired policy is customer-specific.",
+      "recommendation": "Confirm the customer's environment provisioning model before enabling scored evaluation.",
+      "exceptionPolicy": { "allowed": true, "maximumDays": 365, "requiresApprover": true, "review": "Record the approved maker population and review at expiry." },
+      "remediation": { "type": "Script", "guidance": "Generate a review-first tenant-settings script; do not execute automatically.", "blastRadius": "Tenant-wide environment creation for non-admin makers.", "prerequisites": ["Customer-approved provisioning policy", "Power Platform administrator", "Current tenant-settings snapshot"], "verification": "Capture a fresh Full tenantSettings section and verify the setting.", "rollbackLimitations": "The setting can be reverted, but environments created while unrestricted remain.", "templateId": "tenant-settings.restrict-production-creation.v1" },
+      "docsUrl": "https://learn.microsoft.com/power-platform/admin/powerapps-powershell",
+      "pocGate": { "status": "Documented", "question": "Does the selected identity return this property consistently in the target tenant and API version?" }
+    },
+    {
+      "id": "PPG-DLP-002", "version": 1, "title": "All observed environments are covered by DLP policy", "area": "DLP", "severity": "High", "areaWeight": 1.2,
+      "applicability": { "mode": "always", "profileKey": "requireDlpEnvironmentCoverage" },
+      "evaluator": { "key": "dlp.coverage", "version": 1, "params": { "minimumCoverage": 1.0, "emptyEnvironmentResult": "NotApplicable" } },
+      "minSnapshotSchema": 1,
+      "evidenceRequirements": [{ "section": "environments", "coverage": "Full", "confidence": "Documented", "paths": ["environments[*].id"] }, { "section": "dlpPolicies", "coverage": "Full", "confidence": "PocRequired", "paths": ["dlpPolicies[*].environmentType", "dlpPolicies[*].environments"] }],
+      "rationale": "An environment omitted from every applicable DLP policy may permit connector combinations outside the intended boundary.",
+      "recommendation": "Confirm complete environment and DLP scope before reviewing uncovered environments with the customer.",
+      "exceptionPolicy": { "allowed": true, "maximumDays": 90, "requiresApprover": true, "review": "Identify excluded environments and compensating controls." },
+      "remediation": { "type": "Script", "guidance": "Produce a policy-scope diff and review-first script only after impact analysis.", "blastRadius": "DLP changes can immediately affect apps and flows in covered environments.", "prerequisites": ["Full environments evidence", "Full DLP policy evidence", "Dependency and connector impact review"], "verification": "Run a new Full snapshot and recalculate environment-to-policy coverage.", "rollbackLimitations": "Policy definitions can be restored, but interrupted workloads may require manual recovery." },
+      "docsUrl": "https://learn.microsoft.com/power-platform/admin/wp-data-loss-prevention",
+      "pocGate": { "status": "PocRequired", "question": "Does Full DLP collection prove tenant-wide policy scope for delegated, Reader RBAC, and partial environment access scenarios?" }
+    },
+    {
+      "id": "PPG-ENV-002", "version": 1, "title": "Production environments are Managed Environments", "area": "ManagedEnvironments", "severity": "Medium", "areaWeight": 1.0,
+      "applicability": { "mode": "resourcePresent", "profileKey": "requireManagedProductionEnvironments" },
+      "evaluator": { "key": "env.allProductionManaged", "version": 1, "params": { "productionClassification": "machineReadable", "requiredState": "Enabled" } },
+      "minSnapshotSchema": 1,
+      "evidenceRequirements": [{ "section": "environments", "coverage": "Full", "confidence": "PocRequired", "paths": ["environments[*].environmentType", "environments[*].governanceConfiguration.protectionLevel"] }],
+      "rationale": "Managed Environments provide additional governance capabilities, but production classification and managed state must be authoritative machine-readable values.",
+      "recommendation": "Enable only after the PoC proves both production classification and managed state without name heuristics.",
+      "exceptionPolicy": { "allowed": true, "maximumDays": 180, "requiresApprover": true, "review": "Document licensing, migration timing, and compensating controls." },
+      "remediation": { "type": "Manual", "guidance": "Review licensing and environment impact before enabling Managed Environments.", "blastRadius": "Environment-level governance and licensing behavior.", "prerequisites": ["Proven machine-readable state", "License review", "Environment owner approval"], "verification": "Capture a fresh Full environments section and verify the authoritative managed state.", "rollbackLimitations": "Disabling is possible, but governance changes made while enabled may persist independently." },
+      "docsUrl": "https://learn.microsoft.com/power-platform/admin/managed-environment-overview",
+      "pocGate": { "status": "Blocked", "question": "Which stable endpoint fields authoritatively identify production type and Managed Environment state across supported identities?" }
+    },
+    {
+      "id": "PPG-SHR-001", "version": 1, "title": "Default-environment resources are not broadly shared", "area": "SharingOwnership", "severity": "Critical", "areaWeight": 1.1,
+      "applicability": { "mode": "customerProfile", "profileKey": "restrictBroadSharingInDefaultEnvironment" },
+      "evaluator": { "key": "sharing.everyoneInDefault", "version": 1, "params": { "principalTypes": ["Everyone", "Tenant"], "maximumAssignments": 0 } },
+      "minSnapshotSchema": 1,
+      "evidenceRequirements": [{ "section": "environments", "coverage": "Full", "confidence": "Documented", "paths": ["environments[*].isDefault"] }, { "section": "apps", "coverage": "Full", "confidence": "PocRequired", "paths": ["apps[*].environmentId", "apps[*].roleAssignments[*]"] }, { "section": "flows", "coverage": "Full", "confidence": "PocRequired", "paths": ["flows[*].environmentId", "flows[*].roleAssignments[*]"] }],
+      "rationale": "Tenant-wide access in the default environment can create broad data and connector exposure, but approved collaboration patterns vary by customer.",
+      "recommendation": "Define the customer's allowed principals and exceptions before scoring; never conclude Pass from partial assignments.",
+      "exceptionPolicy": { "allowed": true, "maximumDays": 90, "requiresApprover": true, "review": "Record business owner, resource scope, audience, and data classification." },
+      "remediation": { "type": "Manual", "guidance": "Review each assignment with the resource owner and remove access through approved change control.", "blastRadius": "Removing assignments can interrupt all current users of an app or flow.", "prerequisites": ["Full app and flow role assignments", "Customer sharing profile", "Resource owner confirmation"], "verification": "Refresh all role assignments and confirm intended principals retain access.", "rollbackLimitations": "Prior assignments can be recreated only if their complete membership and role details were retained." },
+      "docsUrl": "https://learn.microsoft.com/power-platform/admin/powerapps-powershell",
+      "pocGate": { "status": "PocRequired", "question": "Can each supported identity retrieve complete app and flow role assignments, including broad principals, across all accessible environments?" }
+    },
+    {
+      "id": "PPG-SHR-002", "version": 1, "title": "Apps and flows have resolvable enabled owners", "area": "SharingOwnership", "severity": "High", "areaWeight": 1.0,
+      "applicability": { "mode": "resourcePresent", "profileKey": "requireEnabledResourceOwners" },
+      "evaluator": { "key": "resources.orphanCount", "version": 1, "params": { "orphanStates": ["Disabled", "NotFound"], "unknownStates": ["Unresolved"], "maximumOrphans": 0, "unknownResult": "NotEvaluated" } },
+      "minSnapshotSchema": 1,
+      "evidenceRequirements": [{ "section": "apps", "coverage": "Full", "confidence": "PocRequired", "paths": ["apps[*].ownerObjectId"] }, { "section": "flows", "coverage": "Full", "confidence": "PocRequired", "paths": ["flows[*].ownerObjectId"] }, { "section": "ownerDirectory", "coverage": "Full", "confidence": "Documented", "paths": ["ownerDirectory[*].objectId", "ownerDirectory[*].status"] }],
+      "rationale": "Disabled or deleted owners can leave business resources without accountable operational ownership; unresolved lookups are evidence gaps, not orphan proof.",
+      "recommendation": "Treat Disabled and NotFound as orphan evidence; return NotEvaluated when any required owner lookup is Unresolved.",
+      "exceptionPolicy": { "allowed": true, "maximumDays": 30, "requiresApprover": true, "review": "Name an interim accountable owner and reassignment date." },
+      "remediation": { "type": "Script", "guidance": "Generate owner-reassignment commands for review; never select a replacement owner automatically.", "blastRadius": "Ownership affects administration, support, and potentially connections used by the resource.", "prerequisites": ["Full resource inventory", "Full owner enrichment", "Approved replacement owner"], "verification": "Refresh inventory and directory enrichment and confirm the new owner is Enabled.", "rollbackLimitations": "Reassignment is reversible only while the prior owner still exists and is eligible." },
+      "docsUrl": "https://learn.microsoft.com/graph/api/user-get",
+      "pocGate": { "status": "PocRequired", "question": "Are owner IDs complete for apps and flows, and can Graph distinguish Disabled, NotFound, and lookup failure without conflation?" }
+    },
+    {
+      "id": "PPG-AI-001", "version": 1, "title": "AI data-movement settings require customer review", "area": "AIGovernance", "severity": "Informational", "areaWeight": 1.0,
+      "applicability": { "mode": "advisory", "profileKey": "reviewAiDataMovement" },
+      "evaluator": { "key": "tenant.settingIn", "version": 1, "params": { "path": "tenantSettings.generativeAiDataMovement", "acceptedValues": [], "result": "NotEvaluated" } },
+      "minSnapshotSchema": 1,
+      "evidenceRequirements": [{ "section": "tenantSettings", "coverage": "Full", "confidence": "PocRequired", "paths": ["tenantSettings.generativeAiDataMovement"] }],
+      "rationale": "AI data-movement requirements depend on customer geography, contracts, workloads, and current product behavior; observation alone is not a universal failure.",
+      "recommendation": "Review the observed setting with Security, Privacy, and the customer; define an approved policy before any scored rule is introduced.",
+      "exceptionPolicy": { "allowed": false, "maximumDays": null, "requiresApprover": false, "review": "Informational advisories do not require scoring exceptions." },
+      "remediation": { "type": "Informational", "guidance": "Provide the observed value and current Microsoft documentation for customer review.", "blastRadius": "No change is proposed by this advisory.", "prerequisites": ["Full tenant-settings evidence", "Customer geography and data policy"], "verification": "Record the customer's policy decision and refresh evidence after an approved change.", "rollbackLimitations": "Not applicable because this rule does not generate a change." },
+      "docsUrl": "https://learn.microsoft.com/microsoft-copilot-studio/security-and-governance",
+      "pocGate": { "status": "Advisory", "question": "Which stable machine-readable settings and current documentation support a customer-specific AI data-movement policy?" }
+    }
+  ]
+}

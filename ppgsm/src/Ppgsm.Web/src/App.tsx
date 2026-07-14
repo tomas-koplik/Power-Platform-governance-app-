@@ -1,0 +1,209 @@
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Activity, AlertTriangle, ArrowRight, BarChart3, Check, ChevronDown, CircleUserRound, ClipboardCheck, Columns3, Download, FileCode2, Gauge, GitCompareArrows, LayoutDashboard, ListFilter, LockKeyhole, Menu, Network, Play, Printer, Search, Settings2, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { adapter, ApiProblem, logout } from "./api";
+import { displayIdentity, type Coverage, type DlpPolicy, type Finding, type Snapshot, type WorkspaceData } from "./domain";
+
+const nav = [
+  ["/portfolio", "Portfolio", LayoutDashboard], ["/snapshot", "Snapshot", Activity], ["/dashboard", "Dashboard", Gauge],
+  ["/findings", "Findings", ListFilter], ["/evidence", "Evidence", Settings2], ["/dlp", "DLP map", Network],
+  ["/compare", "Compare", GitCompareArrows], ["/remediation", "Remediation", ClipboardCheck],
+] as const;
+
+const coverageOrder: Record<Coverage, number> = { Failed: 0, Partial: 1, Skipped: 2, Full: 3 };
+const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+
+export function App() {
+  const query = useQuery({ queryKey: ["workspace", adapter.kind], queryFn: ({ signal }) => adapter.loadWorkspace(signal) });
+  if (query.isLoading) return <AppState title="Loading governance workspace" detail="Resolving your authenticated server membership and tenant access." />;
+  if (query.isError) return <AppState title="Workspace unavailable" detail={formatError(query.error)} action={<button className="button primary" onClick={() => void query.refetch()}>Try again</button>} />;
+  if (!query.data) return <AppState title="No workspace available" detail="The server returned no customer membership data." />;
+  return <Shell data={query.data} />;
+}
+
+function Shell({ data }: { data: WorkspaceData }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+  useEffect(() => { setMenuOpen(false); document.getElementById("page-heading")?.focus(); }, [location.pathname]);
+  const customer = data.customers[0];
+  return <div className="app-frame">
+    <header className="topbar">
+      <div className="brand"><span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span><span><strong>Zava</strong><small>Power Platform Governance</small></span></div>
+      {adapter.kind === "mock" && <span className="mock-label">Hypothetical PoC scenario · review only</span>}
+      <div className="top-actions"><span className="role-label">{data.session.role}</span>{adapter.kind === "live" && <button className="icon-button" title="Sign out" aria-label={`Sign out ${data.session.displayName}`} onClick={() => void logout()}><CircleUserRound /></button>}<button className="icon-button mobile-menu" aria-label="Toggle navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button></div>
+    </header>
+    <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
+      <div className="tenant-context"><span>Customer tenant</span><strong>{customer?.name ?? "No membership"}</strong><small>{customer?.region}</small></div>
+      <nav aria-label="Primary navigation">{nav.map(([to, label, Icon]) => <NavLink key={to} to={to}><Icon aria-hidden="true" /><span>{label}</span></NavLink>)}</nav>
+      {customer && <div className="connection-card"><span className={`status-dot ${customer.connection.status.toLowerCase()}`} /> <div><strong>{customer.connection.status}</strong><small>{customer.connection.mode} connection</small></div></div>}
+    </aside>
+    <main id="main-content"><Routes>
+      <Route path="/portfolio" element={<Portfolio data={data} />} />
+      <Route path="/onboarding" element={<Onboarding data={data} />} />
+      <Route path="/onboarding/callback" element={<ConsentCallback />} />
+      <Route path="/snapshot" element={<SnapshotJourney data={data} />} />
+      <Route path="/dashboard" element={<Dashboard data={data} />} />
+      <Route path="/findings" element={<Findings data={data} />} />
+      <Route path="/evidence" element={<EvidenceExplorer data={data} />} />
+      <Route path="/dlp" element={<DlpMap data={data} />} />
+      <Route path="/compare" element={<Comparison data={data} />} />
+      <Route path="/remediation" element={<Remediation data={data} />} />
+      <Route path="*" element={<Navigate to="/portfolio" replace />} />
+    </Routes></main>
+  </div>;
+}
+
+function Page({ eyebrow, title, description, actions, children }: { eyebrow: string; title: string; description: string; actions?: React.ReactNode; children: React.ReactNode }) {
+  return <><header className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1 id="page-heading" tabIndex={-1}>{title}</h1><p>{description}</p></div>{actions && <div className="page-actions">{actions}</div>}</header>{children}</>;
+}
+
+function Portfolio({ data }: { data: WorkspaceData }) {
+  return <Page eyebrow="R1 · Authenticated workspace" title="Customer portfolio" description="Tenant choices come from server-side membership. URL or header tenant selection is never trusted.">
+    {!data.capabilities.portfolio && <ContractNotice feature="Portfolio membership endpoint" />}
+    <div className="portfolio-grid">{data.customers.length ? data.customers.map((customer) => <article className="customer-row" key={customer.customerId}>
+      <div><span className="status-line"><span className={`status-dot ${customer.connection.status.toLowerCase()}`} />{customer.connection.status}</span><h2>{customer.name}</h2><p>{customer.region} · {customer.status}</p></div>
+      <div className="customer-score"><strong>{data.score.overall}</strong><span>{data.score.tier}</span><small>{data.score.evaluated}/{data.score.total} rules evaluated</small></div>
+      <div className="customer-actions"><NavLink className="button secondary" to="/dashboard">Open workspace</NavLink><NavLink className="button primary" to="/snapshot"><Play /> Run snapshot</NavLink></div>
+    </article>) : <Empty title="No customer memberships" detail="Ask an administrator to grant a customer membership before continuing." />}</div>
+    <section className="section-band"><div><p className="eyebrow">Customer setup</p><h2>Onboard another tenant</h2><p>Review delegated access, optional app-only reader access, storage, retention, and revocation before consent.</p></div><NavLink className="button secondary" to="/onboarding">Review consent journey <ArrowRight /></NavLink></section>
+  </Page>;
+}
+
+function Onboarding({ data }: { data: WorkspaceData }) {
+  const customer = data.customers[0];
+  const queryClient = useQueryClient();
+  const [confirmed, setConfirmed] = useState(false);
+  const [offboardingConfirmed, setOffboardingConfirmed] = useState(false);
+  const connection = useQuery({ queryKey: ["connection", customer?.customerId], queryFn: () => adapter.getConnection(customer.customerId), enabled: adapter.kind === "live" && !!customer && data.capabilities.onboarding });
+  const tenantCapabilities = useQuery({ queryKey: ["tenant-capabilities", customer?.customerId], queryFn: () => adapter.getTenantCapabilities(customer.customerId), enabled: adapter.kind === "live" && !!customer && data.capabilities.onboarding });
+  const deletion = useQuery({ queryKey: ["deletion", customer?.customerId], queryFn: () => adapter.getDeletion(customer.customerId), enabled: adapter.kind === "live" && !!customer && (data.session.role === "CustomerAdmin" || data.session.role === "InternalAdmin"), retry: false });
+  const consent = useMutation({ mutationFn: () => adapter.getConsentUrl(customer.customerId), onSuccess: (result) => window.location.assign(result.url) });
+  const revoke = useMutation({ mutationFn: () => adapter.revokeConnection(customer.customerId), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["connection", customer.customerId] }) });
+  const reconsent = useMutation({ mutationFn: async () => { await adapter.reconsentConnection(customer.customerId); return adapter.getConsentUrl(customer.customerId); }, onSuccess: (result) => window.location.assign(result.url) });
+  const requestDeletion = useMutation({ mutationFn: () => adapter.requestOffboarding(customer.customerId, new Date(Date.now() + 30 * 86400000).toISOString()), onSuccess: () => void deletion.refetch() });
+  const approveDeletion = useMutation({ mutationFn: () => adapter.approveOffboarding(customer.customerId), onSuccess: () => void deletion.refetch() });
+  const currentConnection = connection.data ?? customer?.connection;
+  if (!customer) return <Page eyebrow="R1 · Onboarding" title="Connect a customer tenant" description="A server-side customer membership is required before consent can begin."><Empty title="No customer membership" detail="Ask an administrator to create the customer and grant your membership." /></Page>;
+  return <Page eyebrow="R1 · Onboarding and consent" title="Customer connection" description="Consent is initiated by a server-generated URL and verified against the authenticated callback principal. Administrator object IDs are never accepted from browser input." actions={<button className="button secondary" onClick={() => window.print()}><Printer /> Print consent document</button>}>
+    {!data.capabilities.onboarding && <ContractNotice feature="Consent URL and connection APIs" />}
+    <section className="onboarding-panel consent-document" aria-labelledby="consent-document-title"><p className="eyebrow">Consent document · {customer.name}</p><h2 id="consent-document-title">Read access and evidence handling</h2><div className="consent-list"><Consent title="Delegated scopes" detail="Microsoft Graph and Power Platform read scopes are configured and verified by the server. The current API does not expose the authoritative scope-name list, so this document cannot safely enumerate names until that contract is added." /><Consent title="Data categories" detail="Tenant settings, environments, DLP policies, connector and inventory metadata, owner identity status, and collector provenance. App and flow content is not collected." /><Consent title="Retention" detail="Evidence is retained under the customer policy until its retention expiry or an approved deletion workflow completes. Legal hold can delay deletion." /><Consent title="Region" detail={`Customer evidence is assigned to ${customer.region}. The API remains authoritative for deployed storage residency.`} /><Consent title="Revocation" detail="A customer administrator can revoke this PPGSM connection here. External Microsoft consent revocation may require tenant-side action until the server reports a revocation reference." /><Consent title="Capability evidence" detail="Each endpoint and identity is probed by the server. Unavailable, preview, and degraded results remain visible and are never treated as complete evidence." /></div><label className="confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I reviewed the scopes, data categories, retention, region, revocation, and capability verification.</label><div className="wizard-actions"><button className="button primary" disabled={!confirmed || !data.capabilities.onboarding || consent.isPending} onClick={() => consent.mutate()}><ShieldCheck />{consent.isPending ? "Preparing consent…" : "Continue to administrator consent"}</button></div>{consent.isError && <InlineError error={consent.error} />}</section>
+    <section className="panel connection-detail"><Heading eyebrow="Verified server state" title="Connection and endpoint capabilities" /><div className="status-line"><span className={`status-dot ${currentConnection?.status.toLowerCase()}`} /><strong>{currentConnection?.status ?? "Unavailable"}</strong><span>{customer.connection.detail}</span></div>{connection.isError && <InlineError error={connection.error} />}{tenantCapabilities.data?.length ? <div className="capability-list">{tenantCapabilities.data.map((item) => <article key={item.tenantCapabilityId}><CoverageIcon coverage={item.available ? "Full" : "Failed"} /><div><strong>{item.endpoint}</strong><small>{item.identity} · verified {new Date(item.verifiedAt).toLocaleString()}</small><p>{item.detail}</p></div></article>)}</div> : <Empty title="No verified capability evidence" detail="Consent may be pending, revoked, or verification returned no endpoint records." />}<div className="wizard-actions"><button className="button secondary" disabled={!data.capabilities.onboarding || revoke.isPending || currentConnection?.status === "Revoked"} onClick={() => revoke.mutate()}>Revoke connection</button><button className="button primary" disabled={!data.capabilities.onboarding || reconsent.isPending} onClick={() => reconsent.mutate()}>Reconsent</button></div></section>
+    <section className="panel offboarding"><Heading eyebrow="Independent approval" title="Offboarding and deletion" />{deletion.data ? <dl><div><dt>Status</dt><dd>{deletion.data.status}</dd></div><div><dt>Requested</dt><dd>{new Date(deletion.data.requestedAt).toLocaleString()}</dd></div><div><dt>Approved</dt><dd>{deletion.data.approvedAt ? new Date(deletion.data.approvedAt).toLocaleString() : "Awaiting a different administrator"}</dd></div><div><dt>Retention expiry</dt><dd>{new Date(deletion.data.retentionExpiresAt).toLocaleString()}</dd></div><div><dt>Deletion certificate</dt><dd>{deletion.data.certificateId ?? "Not issued"}</dd></div></dl> : <p>No offboarding request is visible for this customer.</p>}<label className="confirm"><input type="checkbox" checked={offboardingConfirmed} onChange={(event) => setOffboardingConfirmed(event.target.checked)} /> I understand this requests governed deletion after retention and does not delete immediately.</label><div className="wizard-actions"><button className="button secondary" disabled={!offboardingConfirmed || requestDeletion.isPending || deletion.data?.status === "Requested"} onClick={() => requestDeletion.mutate()}>Request offboarding</button><button className="button primary" disabled={deletion.data?.status !== "Requested" || approveDeletion.isPending} onClick={() => approveDeletion.mutate()}>Approve as independent administrator</button></div>{(requestDeletion.isError || approveDeletion.isError) && <InlineError error={(requestDeletion.error ?? approveDeletion.error)!} />}</section>
+  </Page>;
+}
+
+function ConsentCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const input = { state: params.get("state") ?? "", tenant: params.get("tenant") ?? undefined, adminConsent: params.get("admin_consent") ?? undefined, error: params.get("error") ?? undefined, errorDescription: params.get("error_description") ?? undefined };
+  const callback = useQuery({ queryKey: ["consent-callback", input.state], queryFn: () => adapter.submitConsentCallback(input), enabled: adapter.kind === "live" && !!input.state, retry: false });
+  if (!input.state) return <Page eyebrow="R1 · Consent callback" title="Consent response denied" description="Microsoft did not return a verifiable onboarding state."><InlineError error={new Error(input.errorDescription ?? input.error ?? "Missing signed consent state.")} /></Page>;
+  if (callback.isLoading) return <AppState title="Verifying administrator consent" detail="The authenticated callback token and server-signed state are being validated." />;
+  if (callback.isError) return <Page eyebrow="R1 · Consent callback" title="Consent was not activated" description="No connection is treated as active when callback or capability verification fails."><InlineError error={callback.error} /><NavLink className="button secondary" to="/onboarding">Return to consent</NavLink></Page>;
+  const result = callback.data!;
+  return <Page eyebrow="R1 · Consent callback" title={`${result.status} connection`} description={result.detail}><section className="coverage-list" aria-label="Consent verification"><VerificationRow label="Enterprise application" verified={result.enterpriseApplicationPresent} /><VerificationRow label="Delegated scope grant" verified={result.delegatedScopeGranted} /><VerificationRow label="Power Platform role" verified={result.powerPlatformRoleAssigned} /></section><NavLink className="button primary" to="/onboarding">Review connection evidence</NavLink></Page>;
+}
+
+function VerificationRow({ label, verified }: { label: string; verified: boolean }) { return <article><CoverageIcon coverage={verified ? "Full" : "Failed"} /><div><h2>{label}</h2><p>{verified ? "Verified by the server." : "Not verified; connection remains degraded."}</p></div><span className={`coverage ${verified ? "full" : "failed"}`}>{verified ? "Verified" : "Unavailable"}</span></article>; }
+
+function Consent({ title, detail }: { title: string; detail: string }) { return <div><ShieldCheck /><span><strong>{title}</strong><small>{detail}</small></span></div>; }
+
+function SnapshotJourney({ data }: { data: WorkspaceData }) {
+  const customer = data.customers[0];
+  const [scope, setScope] = useState("full");
+  const mutation = useMutation({ mutationFn: () => adapter.startSnapshot({ customerId: customer.customerId, idempotencyKey: crypto.randomUUID(), mode: customer.connection.mode, sections: scope === "full" ? undefined : ["tenantSettings", "environments"] }) });
+  const latest = mutation.data ?? data.snapshots[0];
+  return <Page eyebrow="R2 · Snapshot collection" title="Snapshot progress and coverage" description="Coverage is reported per collector; partial or failed evidence never appears complete." actions={<button className="button primary" disabled={mutation.isPending || !data.capabilities.snapshots} onClick={() => mutation.mutate()}><Play />{mutation.isPending ? "Requesting…" : "Start snapshot"}</button>}>
+    <div className="split-band"><div><label>Collection scope<select value={scope} onChange={(event) => setScope(event.target.value)}><option value="full">Full available scope</option><option value="core">Tenant settings and environments</option></select></label></div><div className="run-summary"><span className={`pill ${latest.status.toLowerCase()}`}>{latest.status}</span><strong>{new Date(latest.requestedAt).toLocaleString()}</strong><small>{latest.mode} · idempotent request</small></div></div>
+    {mutation.isError && <InlineError error={mutation.error} />}
+    {latest.sections.length ? <section className="coverage-list" aria-label="Collector coverage">{[...latest.sections].sort((a, b) => coverageOrder[a.coverage] - coverageOrder[b.coverage]).map((section) => <article key={section.snapshotSectionId}><CoverageIcon coverage={section.coverage} /><div><h2>{humanize(section.sectionKey)}</h2><p>{section.reason ?? `${section.itemCount.toLocaleString()} items captured.`}</p></div><span className={`coverage ${section.coverage.toLowerCase()}`}>{section.coverage}</span><strong>{section.itemCount.toLocaleString()}</strong></article>)}</section> : <Empty title={`${latest.status} snapshot`} detail="The backend has accepted the request. Collector progress events are not implemented yet, so this page will not invent progress." />}
+  </Page>;
+}
+
+function Dashboard({ data }: { data: WorkspaceData }) {
+  const open = data.findings.filter((item) => item.status !== "Pass");
+  return <Page eyebrow="R3 · Assessment" title="Governance posture" description="Score and recommendations remain paired with evidence coverage and confidence.">
+    {!data.capabilities.score && <ContractNotice feature="Score and findings APIs" />}
+    <section className="score-strip"><div className="score-block"><div className="score-ring" style={{ "--score": data.score.overall } as React.CSSProperties}><strong>{data.score.overall}</strong><span>/100</span></div><div><p className="eyebrow">Interpreted score</p><h2>{data.score.tier}</h2><p>{data.score.evaluated}/{data.score.total} rules · {data.score.confidence} evidence coverage</p></div></div><Metric value={String(open.filter((item) => item.severity === "Critical").length)} label="Critical findings" /><Metric value={String(data.environments.length)} label="Environments observed" /><Metric value={String(data.findings.filter((item) => item.status === "NotEvaluated").length)} label="Not evaluated" /></section>
+    <div className="dashboard-grid"><section className="panel"><Heading eyebrow="Interpretation" title="Control area scores" /><div className="area-bars">{Object.entries(data.score.areas).map(([name, value]) => <div key={name}><span>{name}</span><div><i style={{ width: `${value}%` }} /></div><strong>{value}</strong></div>)}</div></section><section className="panel"><Heading eyebrow="Proposed scenario" title="Priority actions" /><p className="scenario-note"><SlidersHorizontal /> Scenario values are proposals only. They do not change observed score or evidence.</p>{open.slice(0, 4).map((finding) => <article className="compact-finding" key={finding.id}><span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span><div><strong>{finding.title}</strong><small>{finding.proposedAction}</small></div></article>)}</section></div>
+  </Page>;
+}
+
+function Findings({ data }: { data: WorkspaceData }) {
+  const [search, setSearch] = useState(""); const [severity, setSeverity] = useState("All"); const [selectedId, setSelectedId] = useState(data.findings[0]?.id);
+  const visible = data.findings.filter((item) => (severity === "All" || item.severity === severity) && `${item.id} ${item.title} ${item.scope}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  const selected = visible.find((item) => item.id === selectedId) ?? visible[0];
+  return <Page eyebrow="R3 · Evidence-backed controls" title="Findings" description="Filter assessments, inspect source observations, and keep recommendations distinct from facts.">
+    <div className="filterbar"><label className="search"><Search /><span>Search findings<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rule, title, or scope" /></span></label><label>Severity<select value={severity} onChange={(event) => setSeverity(event.target.value)}><option>All</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></label></div>
+    <div className="master-detail"><section className="finding-list" aria-label="Findings">{visible.length ? visible.map((finding) => <button key={finding.id} className={finding.id === selected?.id ? "selected" : ""} onClick={() => setSelectedId(finding.id)}><span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span><div><strong>{finding.title}</strong><small>{finding.id} · {finding.scope} · {finding.status}</small></div><ArrowRight /></button>) : <Empty title="No matching findings" detail="Clear or change the current filters." />}</section>{selected && <FindingDetail finding={selected} data={data} />}</div>
+  </Page>;
+}
+
+function FindingDetail({ finding, data }: { finding: Finding; data: WorkspaceData }) {
+  return <aside className="detail-panel"><span className={`severity ${finding.severity.toLowerCase()}`}>{finding.severity}</span><h2>{finding.title}</h2><p>{finding.id} · {finding.area} · {finding.status}</p><FactBlock label="Observed evidence" tone="observed">{finding.observed}</FactBlock><FactBlock label="Interpretation" tone="interpreted">{finding.interpretation}</FactBlock><FactBlock label="Proposed action" tone="proposed">{finding.proposedAction}</FactBlock><dl><div><dt>Scope</dt><dd>{finding.scope}</dd></div><div><dt>Owner</dt><dd>{displayIdentity(finding.ownerUpn, data.session.role)}</dd></div><div><dt>Remediation</dt><dd>{finding.remediation}</dd></div></dl><NavLink className="button secondary full" to="/remediation">Review remediation options</NavLink></aside>;
+}
+
+function EvidenceExplorer({ data }: { data: WorkspaceData }) {
+  const customer = data.customers[0];
+  const [tab, setTab] = useState<"settings" | "environments">("settings"); const [search, setSearch] = useState("");
+  const snapshots = useQuery({ queryKey: ["snapshots", customer?.customerId], queryFn: () => adapter.listSnapshots(customer.customerId), enabled: !!customer && data.capabilities.snapshots });
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState(data.snapshots[0]?.snapshotId ?? "");
+  const selectedSnapshot = snapshots.data?.find((item) => item.snapshotId === selectedSnapshotId) ?? data.snapshots.find((item) => item.snapshotId === selectedSnapshotId);
+  return <Page eyebrow="R4 · Evidence trace" title="Snapshot evidence" description="Choose a snapshot without knowing its identifier, inspect coverage, and discover redacted evidence when the server supplies an evidence index.">
+    <div className="split-band"><label>Snapshot<select value={selectedSnapshotId} onChange={(event) => setSelectedSnapshotId(event.target.value)}>{(snapshots.data ?? data.snapshots).map((item) => <option value={item.snapshotId} key={item.snapshotId}>{new Date(item.requestedAt).toLocaleString()} · {item.status} · {item.mode}</option>)}</select></label>{selectedSnapshot && <div className="run-summary"><span className={`pill ${selectedSnapshot.status.toLowerCase()}`}>{selectedSnapshot.status}</span><small>{selectedSnapshot.sections.length} collector sections · coverage details below</small></div>}</div>
+    {selectedSnapshot?.sections.length ? <section className="coverage-list" aria-label="Selected snapshot coverage">{selectedSnapshot.sections.map((section) => <article key={section.snapshotSectionId}><CoverageIcon coverage={section.coverage} /><div><h2>{humanize(section.sectionKey)}</h2><p>{section.reason ?? `${section.itemCount} observed items`}</p></div><span className={`coverage ${section.coverage.toLowerCase()}`}>{section.coverage}</span></article>)}</section> : <Empty title="No collector sections" detail="This snapshot has no persisted section coverage." />}
+    <ContractNotice feature="Snapshot evidence index/list endpoint" />
+    <div className="tabs" role="tablist" aria-label="Evidence type"><button role="tab" aria-selected={tab === "settings"} onClick={() => setTab("settings")}>Tenant settings</button><button role="tab" aria-selected={tab === "environments"} onClick={() => setTab("environments")}>Environments</button></div>
+    <label className="standalone-search"><Search /> <span>Search evidence<input value={search} onChange={(event) => setSearch(event.target.value)} /></span></label>
+    {tab === "settings" ? <section className="settings-table"><div className="table-header"><span>Setting</span><span>Observed value</span><span>Source</span><span>Coverage</span></div>{data.settings.filter((item) => `${item.label} ${item.key}`.toLowerCase().includes(search.toLowerCase())).map((item) => <article key={item.key}><div><strong>{item.label}</strong><small>{item.key}</small><p>{item.meaning}</p></div><strong>{item.value}</strong><span className={`source ${item.source.toLowerCase()}`}>{item.source}</span><span className={`coverage ${item.coverage.toLowerCase()}`}>{item.coverage}</span></article>)}</section> : <section className="environment-grid">{data.environments.filter((item) => item.name.toLowerCase().includes(search.toLowerCase())).map((item) => <article key={item.id}><div><span className={`risk ${item.risk.toLowerCase()}`}>{item.risk}</span><h2>{item.name}</h2><p>{item.type} · {item.region}</p></div><dl><div><dt>Managed</dt><dd>{item.managed ? "Yes" : "No"}</dd></div><div><dt>DLP</dt><dd>{item.dlpCovered ? "Covered" : "Uncovered"}</dd></div><div><dt>Apps / flows</dt><dd>{item.apps} / {item.flows}</dd></div><div><dt>Owner</dt><dd>{displayIdentity(item.ownerUpn, data.session.role)}</dd></div></dl></article>)}</section>}
+  </Page>;
+}
+
+function DlpMap({ data }: { data: WorkspaceData }) {
+  const [selectedId, setSelectedId] = useState(data.dlpPolicies[0]?.id); const selected = data.dlpPolicies.find((item) => item.id === selectedId);
+  return <Page eyebrow="R4 · Evidence trace" title="DLP coverage map" description="Trace observed environment coverage and connector classification by policy.">
+    {!data.capabilities.dlp && <ContractNotice feature="DLP policy API" />}
+    <div className="dlp-layout"><section className="policy-list"><Heading eyebrow="Observed policies" title={`${data.dlpPolicies.length} policies`} />{data.dlpPolicies.map((policy) => <button className={policy.id === selectedId ? "selected" : ""} key={policy.id} onClick={() => setSelectedId(policy.id)}><ShieldCheck /><span><strong>{policy.name}</strong><small>{policy.scope} · {policy.environments.length} environments</small></span><ArrowRight /></button>)}</section>{selected ? <PolicyDetail policy={selected} data={data} /> : <Empty title="No policy evidence" detail="The selected snapshot contains no DLP policies." />}</div>
+  </Page>;
+}
+
+function PolicyDetail({ policy, data }: { policy: DlpPolicy; data: WorkspaceData }) { return <section className="panel policy-detail"><Heading eyebrow="Environment coverage" title={policy.name} /><div className="coverage-chips">{data.environments.map((environment) => <span className={policy.environments.includes(environment.id) ? "covered" : "uncovered"} key={environment.id}>{environment.name}</span>)}</div><div className="connector-columns"><ConnectorGroup title="Business" items={policy.business} /><ConnectorGroup title="Non-business" items={policy.nonBusiness} /><ConnectorGroup title="Blocked" items={policy.blocked} /></div></section>; }
+function ConnectorGroup({ title, items }: { title: string; items: string[] }) { return <section className={title.toLowerCase().replace("-", "")}><h3>{title}</h3><small>{items.length} observed connectors</small>{items.map((item) => <span key={item}>{item}</span>)}</section>; }
+
+function Comparison({ data }: { data: WorkspaceData }) {
+  const customer = data.customers[0]; const current = data.snapshots[0]; const prior = data.snapshots[1];
+  const comparison = useQuery({ queryKey: ["comparison", customer?.customerId, prior?.snapshotId, current?.snapshotId], queryFn: () => adapter.compareSnapshots(customer.customerId, prior.snapshotId, current.snapshotId), enabled: !!customer && !!current && !!prior && data.capabilities.compare });
+  const exportMutation = useMutation({ mutationFn: () => adapter.createExport(customer.customerId) });
+  const downloadMutation = useMutation({ mutationFn: () => adapter.downloadExport(customer.customerId, exportMutation.data!.exportJobId) });
+  const exportJob = useQuery({ queryKey: ["export", customer?.customerId, exportMutation.data?.exportJobId], queryFn: () => adapter.getExport(customer.customerId, exportMutation.data!.exportJobId), enabled: !!exportMutation.data, refetchInterval: (query) => query.state.data?.status === "Queued" || query.state.data?.status === "Running" ? 2000 : false });
+  const job = exportJob.data ?? exportMutation.data;
+  return <Page eyebrow="R5 · Compare and export" title="Snapshot comparison" description="Compare collection confidence before interpreting posture changes." actions={job?.status === "Completed" && job.downloadUrl ? <button className="button secondary" disabled={downloadMutation.isPending} onClick={() => downloadMutation.mutate()}><Download /> Download JSON</button> : <button className="button secondary" disabled={!data.capabilities.exports || exportMutation.isPending || job?.status === "Queued" || job?.status === "Running"} onClick={() => exportMutation.mutate()}><Download />{job ? `Export ${job.status}` : "Create JSON export"}</button>}>
+    {!data.capabilities.compare && <ContractNotice feature="Snapshot comparison API" />}{!data.capabilities.exports && <ContractNotice feature="JSON export job API" />}
+    {current && prior ? <><div className="compare-head"><SnapshotCard label="Baseline" snapshot={prior} /><GitCompareArrows /><SnapshotCard label="Current" snapshot={current} /></div>{comparison.isLoading && <p role="status">Comparing server findings…</p>}{comparison.isError && <InlineError error={comparison.error} />}{comparison.data ? <section className="score-strip" aria-label="Observed finding changes"><Metric value={String(comparison.data.addedFindings)} label="Added findings" /><Metric value={String(comparison.data.resolvedFindings)} label="Resolved findings" /><Metric value={String(comparison.data.changedFindings)} label="Changed findings" /></section> : !data.capabilities.compare && <Empty title="Comparison unavailable" detail="Collector coverage can be inspected, but no posture or drift conclusion is asserted." />}{job && <p role="status">JSON export: {job.status}{job.failureReason ? ` · ${job.failureReason}` : job.status === "Completed" && !job.downloadUrl ? " · the API returned no download URL" : ""}</p>}</> : <Empty title="Two snapshots required" detail="Run or select another snapshot to compare evidence." />}
+  </Page>;
+}
+
+function Remediation({ data }: { data: WorkspaceData }) {
+  const customer = data.customers[0];
+  const [selected, setSelected] = useState(data.findings.find((item) => item.remediation === "Script")); const [dialogOpen, setDialogOpen] = useState(false); const [exceptionReason, setExceptionReason] = useState(""); const [confirmed, setConfirmed] = useState(false); const dialogRef = useRef<HTMLDialogElement>(null);
+  const exception = useMutation({ mutationFn: () => adapter.createException(customer.customerId, selected!.findingId!, exceptionReason, new Date(Date.now() + 30 * 86400000).toISOString()), onSuccess: () => { setDialogOpen(false); setExceptionReason(""); setConfirmed(false); } });
+  useEffect(() => { if (dialogOpen) dialogRef.current?.showModal(); else dialogRef.current?.close(); }, [dialogOpen]);
+  return <Page eyebrow="R6 · Governed action" title="Script-first remediation" description="Proposals, approvals, and execution are separate states. No write operation is implied.">
+    {!data.capabilities.remediation && <ContractNotice feature="Exceptions, remediation, and approval APIs" />}
+    {selected && <section className="state-key" aria-label="Action provenance"><FactBlock label="Observed evidence" tone="observed">{selected.observed}</FactBlock><FactBlock label="Interpretation" tone="interpreted">{selected.interpretation}</FactBlock><FactBlock label="Simulated action" tone="proposed">{selected.proposedAction}</FactBlock><FactBlock label="Executed state" tone="executed">No execution recorded. This browser cannot run the proposed script.</FactBlock></section>}
+    <div className="remediation-layout"><section className="action-list"><Heading eyebrow="Eligible findings" title="Governed actions" />{data.findings.filter((item) => item.remediation === "Script").map((item) => <button className={selected?.id === item.id ? "selected" : ""} key={item.id} onClick={() => setSelected(item)}><FileCode2 /><span><strong>{item.title}</strong><small>{item.id} · Server proposal required</small></span></button>)}</section>{selected && <section className="panel script-panel"><Heading eyebrow="Proposed action · Not executed" title={selected.title} /><FactBlock label="Observed evidence" tone="observed">{selected.observed}</FactBlock><FactBlock label="Proposed change" tone="proposed">{selected.proposedAction}</FactBlock><ContractNotice feature="Trusted remediation template and evidence metadata discovery" /><p>The browser never accepts or constructs script text. Proposal and approval controls remain unavailable until the server supplies an eligible trusted template, parameters, evidence hash, validity, and target scope for this finding.</p><div className="script-actions"><button className="button secondary" disabled={!data.capabilities.exceptions || !selected.findingId} onClick={() => setDialogOpen(true)}>Request exception</button><button className="button primary" disabled><LockKeyhole /> Submit server proposal</button></div></section>}</div>
+    <dialog ref={dialogRef} onClose={() => setDialogOpen(false)}><div className="dialog-heading"><div><p className="eyebrow">Explicit confirmation</p><h2>Request a 30-day exception?</h2></div><button className="icon-button" aria-label="Close confirmation" onClick={() => setDialogOpen(false)}><X /></button></div><p>This records an approved exception against the selected server finding. It does not execute a change.</p><label>Business reason<textarea value={exceptionReason} onChange={(event) => setExceptionReason(event.target.value)} /></label><label className="confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I reviewed the observed evidence and exception expiry.</label>{exception.isError && <InlineError error={exception.error} />}<div className="dialog-actions"><button className="button secondary" onClick={() => setDialogOpen(false)}>Cancel</button><button className="button primary" disabled={!confirmed || !exceptionReason.trim() || exception.isPending} onClick={() => exception.mutate()}>Confirm exception</button></div></dialog>
+  </Page>;
+}
+
+function ContractNotice({ feature }: { feature: string }) { return <div className="contract-notice" role="status"><LockKeyhole /><div><strong>{feature} not available in the current API</strong><p>This view is contract-ready but disabled in live mode. Mock data appears only when <code>VITE_DATA_ADAPTER=mock</code>.</p></div></div>; }
+function AppState({ title, detail, action }: { title: string; detail: string; action?: React.ReactNode }) { return <main className="app-state"><div className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></div><h1>{title}</h1><p>{detail}</p>{action}</main>; }
+function InlineError({ error }: { error: Error }) { return <div className="inline-error" role="alert"><AlertTriangle /><div><strong>Snapshot request failed</strong><p>{formatError(error)}</p></div></div>; }
+function Empty({ title, detail }: { title: string; detail: string }) { return <div className="empty"><Columns3 /><h2>{title}</h2><p>{detail}</p></div>; }
+function Metric({ value, label }: { value: string; label: string }) { return <div className="metric"><strong>{value}</strong><span>{label}</span></div>; }
+function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { return <header className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div></header>; }
+function FactBlock({ label, tone, children }: { label: string; tone: "observed" | "interpreted" | "proposed" | "executed"; children: React.ReactNode }) { return <section className={`fact-block ${tone}`}><h3>{label}</h3><p>{children}</p></section>; }
+function CoverageIcon({ coverage }: { coverage: Coverage }) { return <span className={`coverage-icon ${coverage.toLowerCase()}`}>{coverage === "Full" ? <Check /> : coverage === "Failed" ? <X /> : <AlertTriangle />}</span>; }
+function SnapshotCard({ label, snapshot }: { label: string; snapshot: Snapshot }) { return <article><p className="eyebrow">{label}</p><strong>Not evaluated</strong><span>{new Date(snapshot.requestedAt).toLocaleDateString()}</span><small>{snapshot.status} · {snapshot.mode}</small></article>; }
+function humanize(value: string) { return value.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase()); }
+function formatError(error: unknown) { return error instanceof ApiProblem ? `${error.message}${error.correlationId ? ` Correlation: ${error.correlationId}` : ""}` : error instanceof Error ? error.message : "An unknown error occurred."; }

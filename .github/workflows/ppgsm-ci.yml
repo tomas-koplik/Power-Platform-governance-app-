@@ -1,0 +1,199 @@
+name: PPGSM CI
+
+on:
+  pull_request:
+    paths:
+      - 'ppgsm/**'
+      - 'index.html'
+      - 'style.css'
+      - 'app.js'
+      - '.github/workflows/ppgsm-*.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ppgsm/**'
+      - '.github/workflows/ppgsm-*.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+concurrency:
+  group: ppgsm-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ppgsm
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: ppgsm/global.json
+          cache: true
+          cache-dependency-path: 'ppgsm/**/*.csproj'
+      - run: dotnet restore Ppgsm.sln
+      - run: dotnet build Ppgsm.sln --configuration Release --no-restore
+      - run: dotnet test Ppgsm.sln --configuration Release --no-build --logger trx --results-directory TestResults --collect 'XPlat Code Coverage'
+      - run: dotnet publish src/Ppgsm.Api/Ppgsm.Api.csproj --configuration Release --no-build --output artifacts/api
+      - run: dotnet publish src/Ppgsm.Worker/Ppgsm.Worker.csproj --configuration Release --no-build --output artifacts/worker
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ppgsm-dotnet-${{ github.sha }}
+          path: |
+            ppgsm/artifacts
+            ppgsm/TestResults
+          retention-days: 14
+
+  web:
+    name: Web typecheck, tests, build, and Playwright
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ppgsm/src/Ppgsm.Web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install Node.js
+        uses: actions/setup-node@1e60f620b9541d8ca1510710b7a2f3784d8f9be2 # v4
+        with:
+          node-version: '22'
+          cache: ${{ hashFiles('ppgsm/src/Ppgsm.Web/package-lock.json') != '' && 'npm' || '' }}
+          cache-dependency-path: ppgsm/src/Ppgsm.Web/package-lock.json
+      - id: dependencies
+        name: Install frontend dependencies and flag lock gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json ]]; then
+            npm ci
+            echo 'locked=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::package-lock.json is missing. CI uses npm install, but release deployment remains blocked.'
+            npm install --no-audit --no-fund
+            echo 'locked=false' >> "$GITHUB_OUTPUT"
+          fi
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:a11y
+      - name: Verify production build rejects mock adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if VITE_DATA_ADAPTER=mock npm run build; then
+            echo 'Production build unexpectedly accepted the mock adapter.' >&2
+            exit 1
+          fi
+      - run: npm run build
+      - name: Install Playwright Chromium
+        run: npm exec playwright install --with-deps chromium
+      - name: Run Playwright journeys
+        run: npm run test:e2e -- --project=chromium-desktop
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ppgsm-web-${{ github.sha }}
+          path: |
+            ppgsm/src/Ppgsm.Web/dist
+            ppgsm/src/Ppgsm.Web/playwright-report
+            ppgsm/src/Ppgsm.Web/test-results
+          retention-days: 14
+      - name: Record release lock gate
+        if: always()
+        shell: bash
+        run: printf '%s\n' '${{ steps.dependencies.outputs.locked }}' > ../../../ppgsm-web-lock-ready.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ppgsm-web-lock-gate-${{ github.sha }}
+          path: ppgsm-web-lock-ready.txt
+          retention-days: 30
+
+  bicep:
+    name: Bicep lint and artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install Bicep CLI
+        shell: bash
+        run: az bicep install
+      - name: Build templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ppgsm/artifacts/bicep
+          bicep build ppgsm/infra/bootstrap.bicep --outfile ppgsm/artifacts/bicep/bootstrap.json
+          bicep build ppgsm/infra/main.bicep --outfile ppgsm/artifacts/bicep/main.json
+          for environment in dev test staging prod; do
+            bicep build-params "ppgsm/infra/environments/${environment}.bicepparam" --outfile "ppgsm/artifacts/bicep/${environment}.parameters.json"
+          done
+      - name: Checkov policy scan
+        uses: bridgecrewio/checkov-action@7b972723c44fb3d256283fac96fae5d7c1894bb7 # v12
+        with:
+          directory: ppgsm/infra
+          framework: bicep
+          output_format: cli
+          quiet: true
+          soft_fail: false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ppgsm-bicep-${{ github.sha }}
+          path: ppgsm/artifacts/bicep
+          retention-days: 30
+
+  images:
+    name: Build immutable images
+    if: github.event_name != 'pull_request'
+    needs: [dotnet, web, bicep]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - component: api
+            dockerfile: ppgsm/src/Ppgsm.Api/Dockerfile
+          - component: worker
+            dockerfile: ppgsm/src/Ppgsm.Worker/Dockerfile
+          - component: web
+            dockerfile: ppgsm/src/Ppgsm.Web/Dockerfile
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ppgsm-${{ matrix.component }}
+          tags: |
+            type=sha,format=long
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ppgsm
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+      - name: Record digest
+        shell: bash
+        run: |
+          mkdir -p image-digests
+          printf '%s\n' '${{ steps.build.outputs.digest }}' > "image-digests/${{ matrix.component }}.digest"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ppgsm-${{ matrix.component }}-digest-${{ github.sha }}
+          path: image-digests/${{ matrix.component }}.digest
+          retention-days: 90

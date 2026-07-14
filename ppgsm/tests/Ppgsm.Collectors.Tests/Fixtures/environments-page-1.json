@@ -1,0 +1,7 @@
+{
+  "value": [
+    { "name": "env-1", "properties": { "displayName": "Default", "unknownGovernance": "kept" } },
+    { "name": "env-2", "properties": { "displayName": "Production" } }
+  ],
+  "@odata.nextLink": "https://fixture.test/environments?page=2"
+}

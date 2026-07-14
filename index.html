@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zava Power Platform Governance Snapshot Manager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="#" aria-label="Zava governance overview">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span><strong>Zava</strong><small>Power Platform Governance Snapshot Manager</small></span>
+    </a>
+    <div class="header-actions">
+      <span class="connection-status"><i></i>Snapshot source ready</span>
+      <button class="secondary-button" id="compareButton" type="button">Compare snapshots</button>
+      <button class="primary-button" id="collectButton" type="button">Run snapshot</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="tenant-switcher"><span>Customer tenant</span><button type="button">Northstar Manufacturing <b>EU</b></button></div>
+      <nav aria-label="Primary navigation">
+        <button class="nav-item active" data-view="overview" type="button"><span>01</span>Overview</button>
+        <button class="nav-item" data-view="environments" type="button"><span>02</span>Environments</button>
+        <button class="nav-item" data-view="findings" type="button"><span>03</span>Findings <b id="navFindingCount">0</b></button>
+        <button class="nav-item" data-view="dlp" type="button"><span>04</span>DLP map</button>
+      </nav>
+      <div class="sidebar-meta"><span>Connection</span><strong>App-only reader</strong><small>Captured with Power Platform reader RBAC</small></div>
+    </aside>
+
+    <main>
+      <section class="page-header">
+        <div><p class="eyebrow">Governance assessment</p><h1 id="viewTitle">Tenant overview</h1><p id="viewDescription">Prioritize governance gaps from the latest Power Platform snapshot.</p></div>
+        <label class="snapshot-select">Snapshot<select id="snapshotSelect"><option value="current">14 Jul 2026, 09:42</option><option value="previous">30 Jun 2026, 08:15</option></select></label>
+      </section>
+
+      <section class="view active" id="overviewView">
+        <section class="scenario-bar">
+          <div><p class="eyebrow">Remediation simulator</p><h2>Model the score before making changes</h2><p id="scenarioSummary">Current posture with no proposed actions applied.</p></div>
+          <div class="scenario-controls" id="scenarioControls">
+            <label><input type="checkbox" value="dlp"> Extend DLP baseline</label>
+            <label><input type="checkbox" value="sharing"> Restrict broad sharing</label>
+            <label><input type="checkbox" value="isolation"> Enable tenant isolation</label>
+            <label><input type="checkbox" value="managed"> Manage production</label>
+            <button class="secondary-button" id="resetScenarioButton" type="button">Reset</button>
+          </div>
+        </section>
+        <div class="coverage-banner">
+          <div><span class="coverage-icon">98%</span><p><strong>Full governance coverage</strong><small>47 of 48 rules evaluated. Flow ownership is partially available for app-only collection.</small></p></div>
+          <button type="button" id="coverageButton">View collection coverage</button>
+        </div>
+        <section class="score-band" aria-label="Governance score summary">
+          <div class="overall-score"><div class="score-ring" id="overallRing"><strong id="overallScore">0</strong><span>/ 100</span></div><div><p class="eyebrow">Governance score</p><h2 id="scoreTier">Calculating</h2><p id="scoreTrend"></p></div></div>
+          <div class="metric"><strong id="criticalMetric">0</strong><span>Critical findings</span><small>Immediate attention</small></div>
+          <div class="metric"><strong id="environmentMetric">0</strong><span>Environments</span><small id="managedMetric">0 managed</small></div>
+          <div class="metric"><strong id="dlpMetric">0%</strong><span>DLP coverage</span><small id="dlpGapMetric">0 uncovered</small></div>
+          <div class="metric"><strong id="orphanMetric">0</strong><span>Orphaned resources</span><small>Apps and flows</small></div>
+        </section>
+        <div class="overview-grid">
+          <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Control areas</p><h2>Governance posture</h2></div><span>Weighted score</span></div><div id="areaScores" class="area-scores"></div></section>
+          <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Guided next best actions</p><h2>Priority queue</h2></div><button class="text-button" data-open-view="findings" type="button">View all</button></div><div class="queue-mode"><button class="active" data-queue-mode="impact" type="button">Highest impact</button><button data-queue-mode="quick" type="button">Quick wins</button></div><div id="priorityActions"></div></section>
+        </div>
+        <section class="panel environment-preview"><div class="panel-heading"><div><p class="eyebrow">Estate</p><h2>Environment risk map</h2></div><button class="text-button" data-open-view="environments" type="button">Explore environments</button></div><div id="riskMap" class="risk-map"></div><div class="legend"><span><i class="risk-low"></i>Controlled</span><span><i class="risk-medium"></i>Review</span><span><i class="risk-high"></i>High risk</span></div></section>
+      </section>
+
+      <section class="view" id="environmentsView">
+        <div class="toolbar">
+          <label class="search-field">Search environments<input id="environmentSearch" type="search" placeholder="Name, type or region"></label>
+          <label>Risk<select id="riskFilter"><option value="all">All risks</option><option value="high">High</option><option value="medium">Review</option><option value="low">Controlled</option></select></label>
+          <label>Management<select id="managedFilter"><option value="all">All environments</option><option value="managed">Managed</option><option value="unmanaged">Unmanaged</option></select></label>
+          <button class="primary-button compare-environments-button" id="compareEnvironmentsButton" type="button">Compare selected <span id="environmentCompareCount">0</span></button>
+        </div>
+        <div class="data-layout"><section class="table-panel"><table><thead><tr><th>Environment</th><th>Type</th><th>Managed</th><th>DLP</th><th>Resources</th><th>Risk</th></tr></thead><tbody id="environmentRows"></tbody></table><div class="empty-state" id="environmentEmpty" hidden>No environments match these filters.</div></section><aside class="detail-panel" id="environmentDetail"></aside></div>
+      </section>
+
+      <section class="view" id="findingsView">
+        <div class="toolbar findings-toolbar">
+          <label class="search-field">Search findings<input id="findingSearch" type="search" placeholder="Rule, evidence or environment"></label>
+          <label>Severity<select id="severityFilter"><option value="all">All severities</option><option value="Critical">Critical</option><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></select></label>
+          <label>Area<select id="areaFilter"><option value="all">All areas</option></select></label>
+          <label>Status<select id="statusFilter"><option value="all">Open and passed</option><option value="Fail">Failed</option><option value="Partial">Partial</option><option value="Pass">Passed</option></select></label>
+        </div>
+        <section class="executive-strip" id="executiveStrip" aria-live="polite"></section>
+        <div class="data-layout"><section class="finding-list" id="findingList"></section><aside class="detail-panel" id="findingDetail"></aside></div>
+      </section>
+
+      <section class="view" id="dlpView">
+        <div class="dlp-summary" id="dlpSummary"></div>
+        <div class="dlp-layout">
+          <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Policy coverage</p><h2>Environment-to-policy map</h2></div><span>Click a policy</span></div><div class="policy-list" id="policyList"></div></section>
+          <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Connector controls</p><h2>Classification map</h2></div><label class="compact-filter">Policy<select id="connectorPolicyFilter"></select></label></div><div class="connector-map" id="connectorMap"></div></section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="collectionDialog"><div class="dialog-header"><div><p class="eyebrow">Snapshot run</p><h2>Collect tenant governance</h2></div><button class="icon-button" data-close="collectionDialog" type="button" aria-label="Close">x</button></div><div class="dialog-body"><p class="dialog-intro">This workshop build simulates the collection sequence using the embedded PPAC snapshot.</p><div class="collector-list" id="collectorList"></div><div class="dialog-actions"><button class="secondary-button" data-close="collectionDialog" type="button">Cancel</button><button class="primary-button" id="startCollectionButton" type="button">Start collection</button></div></div></dialog>
+  <dialog id="coverageDialog"><div class="dialog-header"><div><p class="eyebrow">Data confidence</p><h2>Collection coverage</h2></div><button class="icon-button" data-close="coverageDialog" type="button" aria-label="Close">x</button></div><div class="dialog-body" id="coverageContent"></div></dialog>
+  <dialog id="compareDialog" class="wide-dialog"><div class="dialog-header"><div><p class="eyebrow">Drift analysis</p><h2>Snapshot comparison</h2></div><button class="icon-button" data-close="compareDialog" type="button" aria-label="Close">x</button></div><div class="dialog-body" id="compareContent"></div></dialog>
+  <dialog id="environmentCompareDialog" class="wide-dialog"><div class="dialog-header"><div><p class="eyebrow">Environment decision view</p><h2>Side-by-side comparison</h2></div><button class="icon-button" data-close="environmentCompareDialog" type="button" aria-label="Close">x</button></div><div class="dialog-body" id="environmentCompareContent"></div></dialog>
+
+  <footer><span>Zava internal governance workspace</span><span>Sample snapshot based on documented Power Platform governance controls</span></footer>
+  <script src="app.js"></script>
+</body>
+</html>

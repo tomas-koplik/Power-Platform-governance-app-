@@ -1,0 +1,7 @@
+{
+  "disableTrialEnvironmentCreation": true,
+  "futurePreviewProperty": {
+    "shapeVersion": 99,
+    "unknownArray": ["preserve", { "nested": true }]
+  }
+}
