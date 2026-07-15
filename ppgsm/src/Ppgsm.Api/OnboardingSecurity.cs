@@ -202,7 +202,7 @@ public sealed class UnavailableTenantConsentVerifier : ITenantConsentVerifier
         Guid entraTenantId,
         AuthenticatedCallbackIdentity adminIdentity,
         CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new ConsentVerificationEvidence(entraTenantId, false, false, false, null, null, [],
+        ValueTask.FromResult(new ConsentVerificationEvidence(entraTenantId, false, false, false, null, adminIdentity.ObjectId.ToString("D"), [],
             "Live Entra and Power Platform verification is not configured; connection activation is denied."));
 }
 

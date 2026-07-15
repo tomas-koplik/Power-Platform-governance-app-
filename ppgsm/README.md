@@ -7,10 +7,10 @@ This directory is an isolated .NET 8 production foundation for Power Platform Go
 - `src/Ppgsm.Core`: tenant domain, immutable snapshot lifecycle, typed evidence, collector contracts, authorization, idempotency, and audit abstractions.
 - `src/Ppgsm.Data`: EF Core 8 SQL Server mappings, tenant write guard, SQL session context interceptor, and Azure SQL RLS script.
 - `src/Ppgsm.Api`: minimal REST API, OpenAPI, problem details, ETags, correlation IDs, local stores, membership authorization, and audit middleware.
-- `src/Ppgsm.Worker`: queue-neutral worker host placeholder. It does not collect tenant data.
-- `src/Ppgsm.Collectors`: assembly placeholder only. Collector implementations belong to the Backend Collectors Engineer.
+- `src/Ppgsm.Worker`: hosted worker with `worker`, `scheduler`, `exports`, and `migrate` commands; consumes Service Bus snapshot jobs, processes offboarding and export jobs, and applies EF migrations.
+- `src/Ppgsm.Collectors`: collector HTTP pipeline (pagination, checkpoint/resume, retry, destination allowlisting), Azure Blob/Service Bus adapters, app-only/delegated token acquisition, and section collectors for tenant settings, environments, DLP, connectors, apps, flows, owner enrichment, and environment groups. Most collectors remain feature-flag-disabled pending their PoC gates.
 - `tests/Ppgsm.Core.Tests`: focused executable domain and tenant-isolation tests.
-- `tests/Ppgsm.Collectors.Tests`: skipped fixture contract placeholder for the collector handoff.
+- `tests/Ppgsm.Collectors.Tests`: collector pipeline, capability, onboarding-security, and runtime adapter tests.
 
 ## Local development
 
@@ -81,7 +81,7 @@ For `PendingManualAction`, a customer administrator must remove the PPGSM assign
 - `GET /api/v1/customers/{customerId}/snapshots/{snapshotId}` returns status, coverage, and an ETag.
 - `GET /api/v1/customers/{customerId}/snapshots/{snapshotId}/evidence/{evidenceId}` reads evidence only after membership and ownership checks.
 
-Local snapshot requests remain `Queued`; no collector or queue implementation is included in this ownership slice.
+In local Development, snapshot requests remain `Queued`; live collection runs only in deployments configured with the production Service Bus/Blob/SQL adapters and enabled collector feature flags.
 
 ## SQL and RLS
 
@@ -120,4 +120,4 @@ Operational entry points:
 - `docs/operations/retention-deletion-offboarding.md`
 - `docs/operations/service-objectives-alerts-cost.md`
 
-Production remains blocked until the worker implements queue consumption, scheduler and `migrate` commands; SQL contained users/custom roles are bootstrapped and tested; app registrations/consent/RBAC are approved and manually configured; custom queue-age and certificate-expiry signals are verified; a disposable deployment, revision rollback, restore test, and regional DR design are evidenced.
+Production remains blocked until SQL contained users/custom roles are bootstrapped and tested; app registrations/consent/RBAC are approved and manually configured; the collector PoC gates (T-01 through T-08) are evidenced and approved per tenant; custom queue-age and certificate-expiry signals are verified; a disposable deployment, revision rollback, restore test, and regional DR design are evidenced.

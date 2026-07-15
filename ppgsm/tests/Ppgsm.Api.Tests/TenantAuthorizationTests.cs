@@ -82,7 +82,8 @@ public sealed class TenantAuthorizationTests : IClassFixture<DevelopmentApiFacto
             using (request)
             using (var response = await outsider.SendAsync(request))
             {
-                Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                Assert.True(HttpStatusCode.Forbidden == response.StatusCode,
+                    $"{request.Method} {request.RequestUri} returned {(int)response.StatusCode} {response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
             }
         }
     }

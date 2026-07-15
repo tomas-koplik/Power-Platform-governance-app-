@@ -199,7 +199,7 @@ public sealed class SqlDurableStore(
         var evidence = await db.RawEvidenceReferences.AsNoTracking()
             .Where(value => evidenceIds.Contains(value.RawEvidenceReferenceId)).ToArrayAsync(cancellationToken);
         return new(record.CustomerId, record.SnapshotId, record.SectionKey, record.ContinuationToken,
-            record.CompletedPages, record.ItemCount, evidence, record.UpdatedAt);
+            record.CompletedPages, record.ItemCount, evidenceIds, evidence, record.UpdatedAt);
     }
 
     public async ValueTask WriteAsync(CollectorCheckpoint checkpoint, CancellationToken cancellationToken)

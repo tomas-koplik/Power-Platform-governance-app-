@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Ppgsm.Core.Snapshots;
 
 namespace Ppgsm.Core.Domain;
@@ -248,6 +249,13 @@ public sealed record ExternalConsentRevocationResult(
 public interface IExternalConsentRevocationAdapter
 {
     ValueTask<ExternalConsentRevocationResult> RevokeAsync(Guid customerId, CancellationToken cancellationToken);
+}
+
+public sealed class UnavailableExternalConsentRevocationAdapter : IExternalConsentRevocationAdapter
+{
+    public ValueTask<ExternalConsentRevocationResult> RevokeAsync(Guid customerId, CancellationToken cancellationToken) =>
+        ValueTask.FromResult(new ExternalConsentRevocationResult(ExternalConsentRevocationStatus.PendingManualAction, null, [],
+            "External tenant consent revocation is not configured."));
 }
 
 public sealed record PhysicalDeletionResult(bool Succeeded, string? EvidenceReference, IReadOnlyDictionary<string, long> AfterCounts, string Detail);

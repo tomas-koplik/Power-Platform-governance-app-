@@ -174,7 +174,7 @@ public sealed class ExternalConsentRevocationTests
     private static ExternalRevocationResponse Response(HttpStatusCode status, string body, string requestId)
     {
         var bytes = Encoding.UTF8.GetBytes(body);
-        return new(status, bytes, requestId, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
+        return new(status, bytes, requestId, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant());
     }
 
     private static HttpResponseMessage HttpResponse(HttpStatusCode status, string body, string? requestId = null, TimeSpan? retryAfter = null)

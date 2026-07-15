@@ -7,6 +7,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Ppgsm.Core\Ppgsm.Core.csproj" />
     <ProjectReference Include="..\..\src\Ppgsm.Worker\Ppgsm.Worker.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

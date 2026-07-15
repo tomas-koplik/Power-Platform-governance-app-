@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using Azure.Core;
@@ -54,7 +55,7 @@ public sealed class MicrosoftIdentityWebOboTokenAcquirer(ITokenAcquisition token
             [resourceScope],
             tenantId: entraTenantId.ToString("D"),
             user: authenticatedPrincipal,
-            cancellationToken: cancellationToken);
+            tokenAcquisitionOptions: new TokenAcquisitionOptions { CancellationToken = cancellationToken });
     }
 }
 

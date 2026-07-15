@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Ppgsm.Core.Domain;
 using Ppgsm.Core.Snapshots;
 
@@ -93,7 +94,8 @@ public sealed class SecurityIntegrationTests
 
         Assert.Equal(ConnectionStatus.Active, result.Connection.Status);
         Assert.Equal(MembershipRole.CustomerAdmin, memberships.Granted?.Role);
-        Assert.Single(connections.Capabilities);
+        Assert.Equal(2, connections.Capabilities.Count);
+        Assert.Contains(connections.Capabilities, value => value.Endpoint == "ppac.role.PowerPlatformAdministrator" && value.Available);
     }
 
     private static ClaimsPrincipal Principal(string scope, string clientId, string audience = "ppgsm-api") => new(new ClaimsIdentity([
@@ -107,7 +109,7 @@ public sealed class SecurityIntegrationTests
 
     private static RawEvidenceReference EvidenceReference() => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "users", "raw/test.json", "hash", "application/json", "v1",
-        DateTimeOffset.UtcNow, CollectorConfidence.Validated, "collector", "1", "1", null, "GET", "/users", 200,
+        DateTimeOffset.UtcNow, EvidenceConfidence.Documented, "collector", "1", "1", null, "GET", "/users", 200,
         "resource", SnapshotMode.Delegated, Guid.NewGuid(), "delegated-user", null, new Dictionary<string, string>(), 1, 1, null, "complete");
 
     private sealed class SubstitutingVerifier : ITenantConsentVerifier

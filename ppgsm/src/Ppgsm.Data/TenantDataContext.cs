@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -202,11 +203,22 @@ public sealed class PpgsmDbContext(DbContextOptions<PpgsmDbContext> options, ICu
         modelBuilder.Entity<RemediationProposal>(entity =>
         {
             entity.HasKey(value => value.ProposalId);
+            entity.Property(value => value.Script);
+            entity.Property(value => value.ProposedBy).HasMaxLength(200);
+            entity.Property(value => value.ProposedAt);
+            entity.Property(value => value.EvidenceCapturedAt);
+            entity.Property(value => value.EvidenceValidUntil);
+            entity.Property(value => value.Kind);
             entity.Property(value => value.RuleId).HasMaxLength(100);
+            entity.Property(value => value.RuleVersion);
             entity.Property(value => value.CatalogVersion).HasMaxLength(40);
             entity.Property(value => value.TemplateId).HasMaxLength(200);
+            entity.Property(value => value.TemplateVersion);
             entity.Property(value => value.EvidenceHash).HasMaxLength(128);
+            entity.Property(value => value.ParametersJson);
             entity.Property(value => value.TargetScope).HasMaxLength(500);
+            entity.Property(value => value.Verification);
+            entity.Property(value => value.Rollback);
             entity.HasIndex(value => new { value.CustomerId, value.SnapshotId, value.FindingId });
         });
         modelBuilder.Entity<SnapshotJobRecord>(entity =>
@@ -227,6 +239,7 @@ public sealed class PpgsmDbContext(DbContextOptions<PpgsmDbContext> options, ICu
         {
             entity.HasKey(value => value.CustomerId);
             entity.Property(value => value.RequestedBy).HasMaxLength(200);
+            entity.Property(value => value.RequestedAt);
             entity.Property(value => value.ApprovedBy).HasMaxLength(200);
             entity.Property(value => value.Detail).HasMaxLength(2000);
             entity.Property(value => value.CertificateId).HasMaxLength(100);

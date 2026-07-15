@@ -102,7 +102,7 @@ public sealed class ProductionRuntimeAdapterTests
         await using var publisher = new AzureServiceBusSnapshotJobPublisher(sender.Object);
         var jobId = Guid.Parse("44444444-4444-4444-4444-444444444444");
 
-        await publisher.PublishAsync(jobId, TestContext.Current.CancellationToken);
+        await publisher.PublishAsync(jobId, CancellationToken.None);
 
         Assert.NotNull(sent);
         Assert.Equal(jobId.ToString("N"), sent.MessageId);
@@ -118,27 +118,27 @@ public sealed class ProductionRuntimeAdapterTests
         var connectionString = Environment.GetEnvironmentVariable("AZURITE_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) return;
         var container = new BlobContainerClient(connectionString, $"raw-{Guid.NewGuid():N}");
-        await container.CreateAsync(cancellationToken: TestContext.Current.CancellationToken);
+        await container.CreateAsync(cancellationToken: CancellationToken.None);
         try
         {
             var store = new AzureBlobRawEvidenceContentStore(container);
             var content = "{\"value\":[1]}"u8.ToArray();
             var evidence = Evidence(content);
 
-            await store.WriteAsync(evidence, new MemoryStream(content), TestContext.Current.CancellationToken);
-            await using var read = await store.OpenReadAsync(evidence.StoragePath, TestContext.Current.CancellationToken);
+            await store.WriteAsync(evidence, new MemoryStream(content), CancellationToken.None);
+            await using var read = await store.OpenReadAsync(evidence.StoragePath, CancellationToken.None);
             Assert.NotNull(read);
             using var copy = new MemoryStream();
-            await read.CopyToAsync(copy, TestContext.Current.CancellationToken);
+            await read.CopyToAsync(copy, CancellationToken.None);
             Assert.Equal(content, copy.ToArray());
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await store.DeleteCustomerAsync(Guid.NewGuid(), [evidence.StoragePath], TestContext.Current.CancellationToken));
-            await store.DeleteCustomerAsync(evidence.CustomerId, [evidence.StoragePath], TestContext.Current.CancellationToken);
-            Assert.Null(await store.OpenReadAsync(evidence.StoragePath, TestContext.Current.CancellationToken));
+                await store.DeleteCustomerAsync(Guid.NewGuid(), [evidence.StoragePath], CancellationToken.None));
+            await store.DeleteCustomerAsync(evidence.CustomerId, [evidence.StoragePath], CancellationToken.None);
+            Assert.Null(await store.OpenReadAsync(evidence.StoragePath, CancellationToken.None));
         }
         finally
         {
-            await container.DeleteIfExistsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            await container.DeleteIfExistsAsync(cancellationToken: CancellationToken.None);
         }
     }
 

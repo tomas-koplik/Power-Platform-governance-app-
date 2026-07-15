@@ -48,7 +48,7 @@ public sealed class JsonEvidencePackageBuilder(JsonEvidencePackageOptions option
         }
 
         package.Position = 0;
-        var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(package, cancellationToken));
+        var hash = Convert.ToHexString(await SHA256.HashDataAsync(package, cancellationToken)).ToLowerInvariant();
         package.Position = 0;
 
         var prefix = Encoding.UTF8.GetBytes($"{{\"contentHash\":\"sha256:{hash}\",\"evidencePackage\":");

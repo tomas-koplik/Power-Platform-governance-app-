@@ -81,7 +81,7 @@ public sealed class JsonEvidencePackageBuilderTests
         using var document = JsonDocument.Parse(bytes);
         var root = document.RootElement;
         var package = root.GetProperty("evidencePackage");
-        var calculated = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(package.GetRawText())));
+        var calculated = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(package.GetRawText()))).ToLowerInvariant();
 
         Assert.Equal($"sha256:{calculated}", root.GetProperty("contentHash").GetString());
         Assert.True(package.TryGetProperty("snapshot", out _));

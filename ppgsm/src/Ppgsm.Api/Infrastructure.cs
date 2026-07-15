@@ -167,6 +167,8 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
     private readonly ConcurrentDictionary<Guid, TenantCapability> _capabilities = new();
     private readonly ConcurrentDictionary<Guid, CustomerLegalHold> _legalHolds = new();
     private readonly ConcurrentDictionary<Guid, CustomerDeletionRecord> _deletions = new();
+    private sealed record LocalEvidence(RawEvidenceReference Reference, byte[] Content);
+
     private readonly ConcurrentDictionary<Guid, LocalEvidence> _evidence = new();
     private readonly ConcurrentDictionary<(Guid CustomerId, Guid SnapshotId, string SectionKey), CollectorCheckpoint> _checkpoints = new();
     private readonly ConcurrentQueue<SectionProgress> _progress = new();
@@ -461,7 +463,7 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
         var bytes = buffer.ToArray();
         if (!_exportArtifacts.TryAdd((customerId, exportJobId), bytes))
             throw new DomainConflictException("Export artifact already exists.");
-        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
         return new($"sha256:{hash}", bytes.LongLength, "application/json", $"local-{hash}");
     }
 
@@ -544,13 +546,6 @@ public sealed class LocalDevelopmentStore : ICustomerStore, ITenantMembershipSto
     public ValueTask CancelCustomerJobsAsync(Guid customerId, CancellationToken cancellationToken) => ValueTask.CompletedTask;
 }
 
-public sealed class UnavailableExternalConsentRevocationAdapter : IExternalConsentRevocationAdapter
-{
-    public ValueTask<ExternalConsentRevocationResult> RevokeAsync(Guid customerId, CancellationToken cancellationToken) =>
-        ValueTask.FromResult(new ExternalConsentRevocationResult(ExternalConsentRevocationStatus.PendingManualAction, null, [],
-            "External tenant consent revocation is not configured."));
-}
-
 public static class ProductionServiceGuard
 {
     private static readonly HashSet<Type> DurableStoreContracts =
@@ -581,6 +576,7 @@ public static class ProductionServiceGuard
     {
         var forbidden = DurableStoreContracts
             .SelectMany(type => provider.GetServices(type))
+            .OfType<object>()
             .Where(instance => instance.GetType().Name.Contains("Local", StringComparison.OrdinalIgnoreCase) ||
                                instance.GetType().Name.Contains("InMemory", StringComparison.OrdinalIgnoreCase))
             .Select(instance => instance.GetType().FullName)

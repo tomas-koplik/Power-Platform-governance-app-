@@ -1,4 +1,5 @@
 using Ppgsm.Collectors.Clients;
+using Ppgsm.Collectors.Transport;
 using Ppgsm.Core.Domain;
 using Ppgsm.Core.Snapshots;
 

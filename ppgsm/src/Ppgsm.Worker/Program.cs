@@ -27,7 +27,7 @@ if (command == "migrate")
 		MembershipRole.InternalAdmin, IsInternal: true));
 	await using var context = new PpgsmDbContext(options, migrationTenant);
 	var migrator = context.GetService<IMigrator>();
-	if (!(await context.Database.GetMigrationsAsync()).Any())
+	if (!context.Database.GetMigrations().Any())
 	{
 		throw new InvalidOperationException("No EF migrations are embedded. Production schema migration cannot fall back to EnsureCreated.");
 	}

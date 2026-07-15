@@ -77,8 +77,9 @@ public sealed class SnapshotEvaluationService(
     private static IReadOnlyCollection<T> ProjectItems<T>(IReadOnlyDictionary<string, EvaluationEvidenceSection> sections,
         string sectionKey, Func<JsonElement, Guid, T?> projector) where T : class
     {
-        if (!sections.TryGetValue(sectionKey, out var section) || section.Data.ValueKind != JsonValueKind.Array ||
-            section.EvidenceReferenceIds.FirstOrDefault() is not var evidenceId || evidenceId == Guid.Empty) return [];
+        if (!sections.TryGetValue(sectionKey, out var section) || section.Data.ValueKind != JsonValueKind.Array) return [];
+        var evidenceId = section.EvidenceReferenceIds.FirstOrDefault();
+        if (evidenceId == Guid.Empty) return [];
         return section.Data.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.Object)
             .Select(value => projector(value, evidenceId)).Where(value => value is not null).Cast<T>().ToArray();
     }
@@ -133,12 +134,12 @@ public sealed class SnapshotEvaluationService(
     private static JsonDocument Normalize(string sectionKey, IEnumerable<JsonElement> roots)
     {
         var values = roots.SelectMany(root => root.ValueKind == JsonValueKind.Array
-                ? root.EnumerateArray()
+                ? (IEnumerable<JsonElement>)root.EnumerateArray()
                 : root.ValueKind == JsonValueKind.Object && root.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.Array
                     ? value.EnumerateArray()
                     : root.ValueKind == JsonValueKind.Object && root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array
                         ? items.EnumerateArray()
-                        : [root])
+                        : new[] { root })
             .Select(value => value.Clone()).ToArray();
         if (sectionKey == SectionKeys.TenantSettings && values.Length == 1 && values[0].ValueKind == JsonValueKind.Object)
             return JsonDocument.Parse(values[0].GetRawText());

@@ -57,7 +57,7 @@ public sealed class FilePublishedRuleCatalog(
             var catalogBytes = await File.ReadAllBytesAsync(candidateCatalogPath, cancellationToken);
             var profileBytes = await File.ReadAllBytesAsync(candidateProfilePath, cancellationToken);
             var manifestBytes = await File.ReadAllBytesAsync(manifestPath, cancellationToken);
-            var contentDigest = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(manifestBytes))}";
+            var contentDigest = $"sha256:{Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant()}";
             if (!trustedDigests.Contains(contentDigest) || expectedDigest is not null && !string.Equals(contentDigest, expectedDigest, StringComparison.Ordinal)) return null;
             var manifest = JsonSerializer.Deserialize<RulePublicationManifest>(manifestBytes, JsonOptions);
             if (manifest is null || manifest.SchemaVersion != 1 || !HashMatches(catalogBytes, manifest.CatalogSha256) || !HashMatches(profileBytes, manifest.ProfileSha256)) return null;
@@ -110,7 +110,7 @@ public sealed class FilePublishedRuleCatalog(
     private static bool HashMatches(byte[] content, string expected)
     {
         if (!TryParseDigest(expected, out var digest)) return false;
-        var actual = Convert.ToHexStringLower(SHA256.HashData(content));
+        var actual = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
         return CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(actual), Encoding.ASCII.GetBytes(digest));
     }
 

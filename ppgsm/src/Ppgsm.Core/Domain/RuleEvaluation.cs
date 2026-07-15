@@ -101,7 +101,7 @@ public sealed class RuleEvaluationRuntime(RuleEvaluatorRegistry registry)
         }
         else if (profile.Mode is "disabled" or "advisory")
         {
-            status = FindingStatus.NotApplicable;
+            if (profile.Mode == "disabled") status = FindingStatus.NotApplicable;
             observed = $"Rule profile mode is {profile.Mode}: {profile.Reason}";
         }
         else if (!IsApplicable(rule, canonicalSections, out var applicabilityReason))
@@ -151,16 +151,16 @@ public sealed class RuleEvaluationRuntime(RuleEvaluatorRegistry registry)
     {
         reason = "Rule is applicable.";
         if (rule.Applicability.Mode is "always" or "profile" or "customerProfile") return true;
-        if (rule.Applicability.Mode == "resource-present")
+        if (rule.Applicability.Mode == "resourcePresent")
         {
-            var key = SectionKeys.Canonicalize(rule.Applicability.ProfileKey);
-            var present = sections.TryGetValue(key, out var section) && section.Data.ValueKind switch
-            {
-                JsonValueKind.Array => section.Data.GetArrayLength() > 0,
-                JsonValueKind.Object => section.Data.EnumerateObject().Any(),
-                _ => false
-            };
-            reason = present ? reason : $"Applicability resource '{key}' is not present.";
+            var present = rule.EvidenceRequirements.Any(requirement =>
+                sections.TryGetValue(SectionKeys.Canonicalize(requirement.Section), out var section) && section.Data.ValueKind switch
+                {
+                    JsonValueKind.Array => section.Data.GetArrayLength() > 0,
+                    JsonValueKind.Object => section.Data.EnumerateObject().Any(),
+                    _ => false
+                });
+            reason = present ? reason : "No applicable resources were collected for this rule's evidence sections.";
             return present;
         }
         reason = $"Applicability mode '{rule.Applicability.Mode}' is unsupported.";
@@ -221,9 +221,19 @@ internal static class EvidenceJson
     private static bool Exists(JsonElement current, ReadOnlySpan<string> parts)
     {
         if (parts.Length == 0) return current.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined;
-        if (current.ValueKind == JsonValueKind.Array) return current.EnumerateArray().Any(item => Exists(item, parts));
+        if (current.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in current.EnumerateArray())
+                if (Exists(item, parts)) return true;
+            return false;
+        }
         return current.ValueKind == JsonValueKind.Object && current.TryGetProperty(parts[0], out var child) && Exists(child, parts[1..]);
     }
+
+    public static bool DeepEquals(JsonElement left, JsonElement right) =>
+        System.Text.Json.Nodes.JsonNode.DeepEquals(
+            System.Text.Json.Nodes.JsonNode.Parse(left.GetRawText()),
+            System.Text.Json.Nodes.JsonNode.Parse(right.GetRawText()));
 }
 
 internal sealed class TenantSettingEqualsEvaluator : IRuleEvaluator
@@ -235,7 +245,7 @@ internal sealed class TenantSettingEqualsEvaluator : IRuleEvaluator
         var path = parameters.GetProperty("path").GetString()!;
         var expected = parameters.GetProperty("expected");
         var actual = EvidenceJson.Value(sections, path)!.Value;
-        var pass = JsonElement.DeepEquals(actual, expected);
+        var pass = EvidenceJson.DeepEquals(actual, expected);
         return new(pass ? FindingStatus.Pass : FindingStatus.Fail, pass ? 1m : 0m, "Tenant", $"{path} is {actual.GetRawText()}; expected {expected.GetRawText()}.");
     }
 }
@@ -249,7 +259,7 @@ internal sealed class TenantSettingInEvaluator : IRuleEvaluator
         var configured = parameters.TryGetProperty("result", out var result) && Enum.TryParse<FindingStatus>(result.GetString(), out var forced) ? forced : (FindingStatus?)null;
         if (configured is not null) return new(configured.Value, 0m, "Tenant", "Observed AI setting requires customer review.");
         var actual = EvidenceJson.Value(sections, parameters.GetProperty("path").GetString()!)!.Value;
-        var pass = parameters.GetProperty("acceptedValues").EnumerateArray().Any(value => JsonElement.DeepEquals(value, actual));
+        var pass = parameters.GetProperty("acceptedValues").EnumerateArray().Any(value => EvidenceJson.DeepEquals(value, actual));
         return new(pass ? FindingStatus.Pass : FindingStatus.Fail, pass ? 1m : 0m, "Tenant", $"Observed value is {actual.GetRawText()}.");
     }
 }
@@ -265,7 +275,7 @@ internal sealed class DlpCoverageEvaluator : IRuleEvaluator
         var covered = EvidenceJson.Items(sections, SectionKeys.DlpPolicies)
             .SelectMany(policy => policy.TryGetProperty("environments", out var values) && values.ValueKind == JsonValueKind.Array ? values.EnumerateArray() : [])
             .Select(value => value.ValueKind == JsonValueKind.Object ? value.GetProperty("id").GetString() : value.GetString())
-            .Where(value => value is not null).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .Where(value => value is not null).Select(value => value!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var ratio = environments.Count(value => covered.Contains(value)) / (decimal)environments.Count;
         var minimum = parameters.GetProperty("minimumCoverage").GetDecimal();
         var status = ratio >= minimum ? FindingStatus.Pass : ratio > 0m ? FindingStatus.Partial : FindingStatus.Fail;

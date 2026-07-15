@@ -92,7 +92,7 @@ public sealed class RuleEvaluationTests
 
     [Theory]
     [InlineData("disabled", "always", "default")]
-    [InlineData("enabled", "resource-present", "apps")]
+    [InlineData("enabled", "resourcePresent", "apps")]
     public void Profile_and_resource_absence_are_not_applicable(string profileMode, string applicabilityMode, string profileKey)
     {
         using var parameters = JsonDocument.Parse("{}");
@@ -121,11 +121,11 @@ public sealed class RuleEvaluationTests
         var manifest = JsonSerializer.SerializeToUtf8Bytes(new
         {
             schemaVersion = 1,
-            catalogSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(catalogPath)))}",
-            profileSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(profilePath)))}"
+            catalogSha256 = $"sha256:{Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(catalogPath))).ToLowerInvariant()}",
+            profileSha256 = $"sha256:{Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(profilePath))).ToLowerInvariant()}"
         });
         File.WriteAllBytes(catalogPath + ".manifest.json", manifest);
-        return $"sha256:{Convert.ToHexStringLower(SHA256.HashData(manifest))}";
+        return $"sha256:{Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant()}";
     }
 
     private static IReadOnlyDictionary<string, EvaluationEvidenceSection> Evidence(JsonElement fixture, RuleDefinition rule)

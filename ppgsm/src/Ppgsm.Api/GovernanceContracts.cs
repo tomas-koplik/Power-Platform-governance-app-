@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Ppgsm.Core.Domain;
 
 namespace Ppgsm.Api;
@@ -56,8 +57,8 @@ public sealed class NoPublishedRuleCatalog : IPublishedRuleCatalog
     public ValueTask<PublishedRuleSet?> GetByDigestAsync(string contentDigest, CancellationToken cancellationToken) => ValueTask.FromResult<PublishedRuleSet?>(null);
 }
 
-public sealed class CapabilityUnavailableException(ApiCapability capability)
-    : InvalidOperationException($"Capability '{capability}' is not available in this deployment.");
+public sealed class CapabilityUnavailableException(ApiCapability capability, string? detail = null)
+    : InvalidOperationException(detail ?? $"Capability '{capability}' is not available in this deployment.");
 
 public sealed record WorkspaceSessionResponse(string DisplayName, MembershipRole Role, string AuthMode, string SubjectKey);
 public sealed record WorkspaceConnectionResponse(ConnectionMode Mode, ConnectionStatus Status, string Detail);

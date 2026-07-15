@@ -2,6 +2,7 @@ using Azure;
 using Azure.Core;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
 using Azure.Storage.Sas;
 using Ppgsm.Core.Domain;
 using System.Security.Cryptography;
@@ -39,7 +40,7 @@ public sealed class AzureBlobExportArtifactStore : IExportArtifactStore, IExport
     {
         if (!content.CanSeek) throw new ArgumentException("Export artifact stream must be seekable for integrity verification.", nameof(content));
         var originalPosition = content.Position;
-        var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(content, cancellationToken));
+        var hash = Convert.ToHexString(await SHA256.HashDataAsync(content, cancellationToken)).ToLowerInvariant();
         var contentLength = content.Position - originalPosition;
         content.Position = originalPosition;
         var path = Path(customerId, exportJobId);

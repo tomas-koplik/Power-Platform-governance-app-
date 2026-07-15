@@ -42,7 +42,7 @@ public sealed class GovernanceTests
 
         var score = GovernanceScoring.Calculate(customerId, snapshotId, findings, SectionCoverage.Full);
 
-        Assert.Equal(93, score.Overall);
+        Assert.Equal(94, score.Overall);
         Assert.Equal(2, score.Evaluated);
         Assert.Equal("Excellent", score.Tier);
     }

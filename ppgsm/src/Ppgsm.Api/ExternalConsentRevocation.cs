@@ -54,7 +54,7 @@ public sealed class ExternalConsentRevocationOptions
 
     private static readonly HashSet<string> AllowedPowerPlatformResources = new(StringComparer.Ordinal)
     {
-        CollectorResources.PowerPlatform, CollectorResources.BusinessApplications
+        CollectorResources.PowerPlatform, "https://api.bap.microsoft.com/.default"
     };
 }
 
@@ -108,13 +108,19 @@ public sealed class ExternalConsentRevocationAdapter(
                  !TryGuid(resolved[0], "appId", out var resolvedAppId) || resolvedAppId != clientApplicationId))
                 return Result(ExternalConsentRevocationStatus.Failed, customerId, customer.EntraTenantId, evidence, "Graph returned a wrong or non-unique tenant service principal; no write was attempted.");
 
-            var grants = await GraphAsync(customer.EntraTenantId, HttpMethod.Get,
-                $"v1.0/oauth2PermissionGrants?$filter=clientId eq '{storedServicePrincipalId:D}'&$select=id,clientId", null,
-                "graph.listDelegatedPermissionGrants", evidence, cancellationToken);
-            if (!grants.IsSuccess())
-                return Result(ExternalConsentRevocationStatus.Failed, customerId, customer.EntraTenantId, evidence, "Microsoft Graph could not enumerate delegated permission grants.");
-
-            var grantValues = ReadValues(grants.Body);
+            var grantValues = new List<JsonElement>();
+            var nextPage = new Uri(graphRoot, $"v1.0/oauth2PermissionGrants?$filter=clientId eq '{storedServicePrincipalId:D}'&$select=id,clientId");
+            while (nextPage is not null)
+            {
+                if (nextPage.Scheme != Uri.UriSchemeHttps || !string.Equals(nextPage.Host, graphRoot.Host, StringComparison.OrdinalIgnoreCase))
+                    return Result(ExternalConsentRevocationStatus.Failed, customerId, customer.EntraTenantId, evidence, "Graph pagination left the configured Graph origin; no write was attempted.");
+                var grants = await SendAsync(customer.EntraTenantId, CollectorResources.Graph, HttpMethod.Get, nextPage, null,
+                    "graph.listDelegatedPermissionGrants", evidence, cancellationToken);
+                if (!grants.IsSuccess())
+                    return Result(ExternalConsentRevocationStatus.Failed, customerId, customer.EntraTenantId, evidence, "Microsoft Graph could not enumerate delegated permission grants.");
+                grantValues.AddRange(ReadValues(grants.Body));
+                nextPage = ReadNextLink(grants.Body);
+            }
             if (grantValues.Any(value => !TryGuid(value, "id", out _) ||
                 !TryGuid(value, "clientId", out var clientId) || clientId != storedServicePrincipalId))
                 return Result(ExternalConsentRevocationStatus.Failed, customerId, customer.EntraTenantId, evidence, "Graph returned a grant for the wrong service principal; no grant was removed.");
@@ -203,7 +209,7 @@ public sealed class ExternalConsentRevocationAdapter(
             options.PowerPlatformRbacEndpoint,
             evidence
         });
-        var hash = Convert.ToHexStringLower(SHA256.HashData(canonical));
+        var hash = Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
         return new(status, evidence.Count == 0 ? null : $"sha256:{hash}", evidence.ToArray(), detail);
     }
 
@@ -213,8 +219,18 @@ public sealed class ExternalConsentRevocationAdapter(
         return document.RootElement.GetProperty("value").EnumerateArray().Select(value => value.Clone()).ToList();
     }
 
-    private static bool TryGuid(JsonElement value, string propertyName, out Guid result) =>
-        value.TryGetProperty(propertyName, out var property) && Guid.TryParse(property.GetString(), out result) && result != Guid.Empty;
+    private static Uri? ReadNextLink(byte[] body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.TryGetProperty("@odata.nextLink", out var link) && link.ValueKind == JsonValueKind.String &&
+            Uri.TryCreate(link.GetString(), UriKind.Absolute, out var uri) ? uri : null;
+    }
+
+    private static bool TryGuid(JsonElement value, string propertyName, out Guid result)
+    {
+        result = Guid.Empty;
+        return value.TryGetProperty(propertyName, out var property) && Guid.TryParse(property.GetString(), out result) && result != Guid.Empty;
+    }
 }
 
 public sealed class MicrosoftExternalRevocationTransport(
@@ -240,7 +256,7 @@ public sealed class MicrosoftExternalRevocationTransport(
                 continue;
             }
             return new(response.StatusCode, body, ReadRequestId(response),
-                Convert.ToHexStringLower(SHA256.HashData(body)));
+                Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant());
         }
     }
 

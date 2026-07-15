@@ -130,7 +130,8 @@ public sealed class RuleCatalogPublicationTests
             var digest = WriteManifest(invalid, ProfilePath());
             var published = await new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, digest).GetCurrentAsync(CancellationToken.None);
             Assert.Null(published);
-            Assert.False(new ApiCapabilityRegistry(new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, digest)).Status["Score"]);
+            Assert.False(new ApiCapabilityRegistry(new FilePublishedRuleCatalog(invalid, ProfilePath(), Version, digest),
+                new BuiltInTrustedRemediationTemplateCatalog(), new OffboardingCapability(false)).Status["Score"]);
         }
         finally
         {
@@ -141,18 +142,20 @@ public sealed class RuleCatalogPublicationTests
     [Fact]
     public void Score_capability_fails_closed_without_a_published_catalog()
     {
-        var capabilities = new ApiCapabilityRegistry(new NoPublishedRuleCatalog());
+        var capabilities = new ApiCapabilityRegistry(new NoPublishedRuleCatalog(),
+            new BuiltInTrustedRemediationTemplateCatalog(), new OffboardingCapability(false));
 
         Assert.False(capabilities.Status["Score"]);
         Assert.Throws<CapabilityUnavailableException>(() => capabilities.Require(ApiCapability.Score));
     }
 
     [Fact]
-    public void Score_capability_is_enabled_for_a_validated_publication()
+    public async Task Score_capability_is_enabled_for_a_validated_publication()
     {
-        var published = Catalog().GetCurrentAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        var published = await Catalog().GetCurrentAsync(CancellationToken.None);
         Assert.NotNull(published);
-        var capabilities = new ApiCapabilityRegistry(new StaticCatalog(published));
+        var capabilities = new ApiCapabilityRegistry(new StaticCatalog(published),
+            new BuiltInTrustedRemediationTemplateCatalog(), new OffboardingCapability(false));
 
         Assert.True(capabilities.Status["Score"]);
     }
@@ -163,7 +166,7 @@ public sealed class RuleCatalogPublicationTests
         await using var stream = File.OpenRead(Path.Combine(AppContext.BaseDirectory, "rules", "v1", "fixtures", "acceptance-cases.yaml"));
         using var document = await JsonDocument.ParseAsync(stream);
         var cases = document.RootElement.GetProperty("cases").EnumerateArray().ToArray();
-        var statuses = cases.Select(value => value.GetProperty("expectedStatus").GetString()).ToHashSet(StringComparer.Ordinal);
+        var statuses = cases.Select(value => value.GetProperty("expectedStatus").GetString()!).ToHashSet(StringComparer.Ordinal);
 
         Assert.Subset(statuses, new HashSet<string>(["Pass", "Fail", "Partial", "NotEvaluated", "NotApplicable", "Excepted"], StringComparer.Ordinal));
         Assert.All(cases.Where(value => value.GetProperty("expectedStatus").GetString() is "NotEvaluated" or "NotApplicable" or "Excepted"),
@@ -178,11 +181,11 @@ public sealed class RuleCatalogPublicationTests
         var manifest = JsonSerializer.SerializeToUtf8Bytes(new
         {
             schemaVersion = 1,
-            catalogSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(catalogPath)))}",
-            profileSha256 = $"sha256:{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(profilePath)))}"
+            catalogSha256 = $"sha256:{Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(catalogPath))).ToLowerInvariant()}",
+            profileSha256 = $"sha256:{Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(profilePath))).ToLowerInvariant()}"
         });
         File.WriteAllBytes(catalogPath + ".manifest.json", manifest);
-        return $"sha256:{Convert.ToHexStringLower(SHA256.HashData(manifest))}";
+        return $"sha256:{Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant()}";
     }
 
     private static string CatalogPath() => Path.Combine(AppContext.BaseDirectory, "rules", "v1", "catalog.yaml");

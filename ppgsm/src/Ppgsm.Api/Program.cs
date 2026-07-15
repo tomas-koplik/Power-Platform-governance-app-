@@ -227,10 +227,12 @@ app.UseExceptionHandler(exceptionApp => exceptionApp.Run(async context =>
         OnboardingValidationException => (StatusCodes.Status400BadRequest, "Invalid onboarding callback"),
         StaleEvidenceException => (StatusCodes.Status409Conflict, "Stale evidence"),
         CapabilityUnavailableException => (StatusCodes.Status503ServiceUnavailable, "Capability unavailable"),
+        BadHttpRequestException bad => (bad.StatusCode, "Invalid request"),
         ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request"),
         _ => (StatusCodes.Status500InternalServerError, "Unexpected error")
     };
-    await Results.Problem(statusCode: status, title: title, detail: status < 500 ? exception?.Message : null).ExecuteAsync(context);
+    var detail = status < 500 || exception is CapabilityUnavailableException ? exception?.Message : null;
+    await Results.Problem(statusCode: status, title: title, detail: detail).ExecuteAsync(context);
 }));
 app.UseStatusCodePages();
 if (!app.Environment.IsDevelopment()) app.UseCors();
@@ -327,7 +329,7 @@ api.MapPost("/customers/{customerId:guid}/snapshots", async (
     TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.CustomerAdmin, cancellationToken);
+    var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Consultant, cancellationToken);
     httpContext.SetAuthorizedTenant(tenant);
     var idempotencyKey = httpRequest.Headers["Idempotency-Key"].FirstOrDefault();
     if (string.IsNullOrWhiteSpace(idempotencyKey)) return Results.Problem(statusCode: 400, title: "Idempotency-Key is required");
@@ -336,9 +338,11 @@ api.MapPost("/customers/{customerId:guid}/snapshots", async (
     if (request.Mode == SnapshotMode.AppOnly)
     {
         var jobs = httpContext.RequestServices.GetService<ISnapshotJobStore>()
-            ?? throw new InvalidOperationException("A durable snapshot job store is required for app-only collection.");
+            ?? throw new CapabilityUnavailableException(ApiCapability.CloudQueue,
+                "Durable snapshot enqueue is unavailable in this deployment; app-only collection requires the durable job store.");
         var jobPublisher = httpContext.RequestServices.GetService<ISnapshotCollectionJobPublisher>()
-            ?? throw new InvalidOperationException("A production snapshot job publisher is required.");
+            ?? throw new CapabilityUnavailableException(ApiCapability.CloudQueue,
+                "Durable snapshot enqueue is unavailable in this deployment; app-only collection requires the production job publisher.");
         var customer = await store.FindCustomerAsync(customerId, cancellationToken)
             ?? throw new DomainConflictException("Snapshot customer no longer exists.");
         var connection = await connections.FindAsync(customerId, cancellationToken)
@@ -558,16 +562,16 @@ api.MapGet("/customers/{customerId:guid}/snapshots/{snapshotId:guid}/evidence/{e
 }).Produces(StatusCodes.Status200OK).ProducesProblem(StatusCodes.Status403Forbidden).Produces(StatusCodes.Status404NotFound);
 
 api.MapGet("/customers/{customerId:guid}/snapshots/{snapshotId:guid}/evidence", async (
-    Guid customerId, Guid snapshotId, int page, int pageSize, ClaimsPrincipal principal, HttpContext context,
+    Guid customerId, Guid snapshotId, int? page, int? pageSize, ClaimsPrincipal principal, HttpContext context,
     TenantAuthorizer authorizer, ISnapshotStore snapshots, IEvidenceProjectionStore evidence, CancellationToken cancellationToken) =>
 {
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
     var snapshot = await snapshots.FindByIdAsync(customerId, snapshotId, cancellationToken);
     if (snapshot is null) return Results.NotFound();
-    page = Math.Max(page, 1);
-    pageSize = Math.Clamp(pageSize == 0 ? 50 : pageSize, 1, 100);
-    var result = await evidence.ListEvidenceMetadataAsync(customerId, snapshotId, page, pageSize, cancellationToken);
+    var effectivePage = Math.Max(page ?? 1, 1);
+    var effectivePageSize = Math.Clamp(pageSize is null or 0 ? 50 : pageSize.Value, 1, 100);
+    var result = await evidence.ListEvidenceMetadataAsync(customerId, snapshotId, effectivePage, effectivePageSize, cancellationToken);
     var coverage = EvidenceCoverageAggregator.Aggregate(snapshot.Sections.Select(value => value.Coverage));
     var confidence = result.Items.Count == 0 ? EvidenceConfidence.PocRequired : result.Items.Min(value => value.LifecycleConfidence);
     return Results.Ok(new EvidenceIndexResponse(snapshotId, coverage, confidence,
@@ -642,10 +646,10 @@ api.MapPost("/customers/{customerId:guid}/offboarding", async (
     CustomerOffboardingService offboarding, OffboardingCapability capability,
     CancellationToken cancellationToken) =>
 {
-    capability.Require();
     var subject = principal.Subject();
     var membership = await memberships.FindAsync(subject, customerId, cancellationToken);
     if (membership?.Role is not (MembershipRole.CustomerAdmin or MembershipRole.InternalAdmin)) throw new TenantAccessDeniedException();
+    capability.Require();
     context.SetAuthorizedTenant(new(customerId, subject, membership.Role, membership.Role == MembershipRole.InternalAdmin));
     var deletion = await offboarding.RequestAsync(customerId, subject.ToString(), request.RetentionExpiresAt, cancellationToken);
     return Results.Accepted($"/api/v1/customers/{customerId}/deletion", deletion);
@@ -655,10 +659,10 @@ api.MapPost("/customers/{customerId:guid}/offboarding/approve", async (
     Guid customerId, ClaimsPrincipal principal, HttpContext context, ITenantMembershipStore memberships,
     CustomerOffboardingService offboarding, OffboardingCapability capability, CancellationToken cancellationToken) =>
 {
-    capability.Require();
     var subject = principal.Subject();
     var membership = await memberships.FindAsync(subject, customerId, cancellationToken);
     if (membership?.Role is not (MembershipRole.CustomerAdmin or MembershipRole.InternalAdmin)) throw new TenantAccessDeniedException();
+    capability.Require();
     context.SetAuthorizedTenant(new(customerId, subject, membership.Role, membership.Role == MembershipRole.InternalAdmin));
     return Results.Accepted($"/api/v1/customers/{customerId}/deletion",
         await offboarding.ApproveAsync(customerId, subject.ToString(), cancellationToken));
@@ -677,7 +681,7 @@ api.MapGet("/customers/{customerId:guid}/deletion", async (
 });
 
 api.MapGet("/customers/{customerId:guid}/deletion/certificate", async (
-    Guid customerId, bool download, ClaimsPrincipal principal, HttpContext context, ITenantMembershipStore memberships,
+    Guid customerId, bool? download, ClaimsPrincipal principal, HttpContext context, ITenantMembershipStore memberships,
     ICustomerOffboardingStore offboarding, CancellationToken cancellationToken) =>
 {
     var subject = principal.Subject();
@@ -689,7 +693,7 @@ api.MapGet("/customers/{customerId:guid}/deletion/certificate", async (
     var certificate = new DeletionCertificateResponse(deletion.CertificateId, customerId, deletion.JobId, deletion.RequestedAt,
         deletion.ApprovedAt, deletion.StartedAt, deletion.CompletedAt.Value, deletion.RetentionExpiresAt, "Completed",
         ParseCounts(deletion.BeforeCountsJson), ParseCounts(deletion.AfterCountsJson), deletion.ConsentRevocationReference!, deletion.PhysicalDeletionReference!);
-    if (!download) return Results.Ok(certificate);
+    if (download != true) return Results.Ok(certificate);
     context.Response.Headers.ContentDisposition = $"attachment; filename=ppgsm-deletion-{deletion.CertificateId}.json";
     return Results.Json(certificate);
 }).ProducesProblem(StatusCodes.Status403Forbidden).Produces(StatusCodes.Status404NotFound);
@@ -699,9 +703,9 @@ api.MapGet("/customers/{customerId:guid}/snapshots/{snapshotId:guid}/findings", 
     ISnapshotStore snapshots, IGovernanceStore governance, ApiCapabilityRegistry capabilities, TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Findings);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Findings);
     if (await snapshots.FindByIdAsync(customerId, snapshotId, cancellationToken) is null) return Results.NotFound();
     return Results.Ok(await governance.ListFindingsAsync(customerId, snapshotId, timeProvider.GetUtcNow(), cancellationToken));
 }).Produces<IReadOnlyList<Finding>>().ProducesProblem(StatusCodes.Status403Forbidden);
@@ -711,9 +715,9 @@ api.MapGet("/customers/{customerId:guid}/snapshots/{snapshotId:guid}/score", asy
     ISnapshotStore snapshots, IGovernanceStore governance, ApiCapabilityRegistry capabilities, TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Score);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Score);
     var snapshot = await snapshots.FindByIdAsync(customerId, snapshotId, cancellationToken);
     if (snapshot is null) return Results.NotFound();
     var findings = await governance.ListFindingsAsync(customerId, snapshotId, timeProvider.GetUtcNow(), cancellationToken);
@@ -726,9 +730,9 @@ api.MapPost("/customers/{customerId:guid}/comparisons", async (
     TenantAuthorizer authorizer, ISnapshotStore snapshots, IGovernanceStore governance, ApiCapabilityRegistry capabilities,
     TimeProvider timeProvider, CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Compare);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Compare);
     var baseline = await snapshots.FindByIdAsync(customerId, request.BaselineSnapshotId, cancellationToken);
     var current = await snapshots.FindByIdAsync(customerId, request.CurrentSnapshotId, cancellationToken);
     if (baseline is null || current is null) return Results.NotFound();
@@ -745,9 +749,9 @@ api.MapPost("/customers/{customerId:guid}/exports", async (
     Guid customerId, CreateExportRequest request, ClaimsPrincipal principal, HttpContext context, TenantAuthorizer authorizer,
     ISnapshotStore snapshots, IGovernanceStore governance, ApiCapabilityRegistry capabilities, TimeProvider timeProvider, CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Exports);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Auditor, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Exports);
     if (request.Format != ExportFormat.Json) throw new CapabilityUnavailableException(ApiCapability.Exports);
     if (await snapshots.FindByIdAsync(customerId, request.SnapshotId, cancellationToken) is null) return Results.NotFound();
     if (request.IncludePii && tenant.Role != MembershipRole.InternalAdmin) throw new TenantAccessDeniedException();
@@ -762,9 +766,9 @@ api.MapGet("/customers/{customerId:guid}/exports/{exportJobId:guid}", async (
     Guid customerId, Guid exportJobId, ClaimsPrincipal principal, HttpContext context, TenantAuthorizer authorizer,
     IGovernanceStore governance, ApiCapabilityRegistry capabilities, CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Exports);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Exports);
     var job = await governance.FindExportAsync(customerId, exportJobId, cancellationToken);
     return job is null ? Results.NotFound() : Results.Ok(job);
 }).Produces<ExportJob>().ProducesProblem(StatusCodes.Status403Forbidden);
@@ -774,9 +778,9 @@ api.MapGet("/customers/{customerId:guid}/exports/{exportJobId:guid}/download", a
     IGovernanceStore governance, IExportArtifactStore artifacts, ApiCapabilityRegistry capabilities, TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Exports);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Exports);
     var job = await governance.FindExportAsync(customerId, exportJobId, cancellationToken);
     if (job is null) return Results.NotFound();
     if (job.Status != ExportJobStatus.Completed || job.DownloadExpiresAt <= timeProvider.GetUtcNow()) return Results.Conflict();
@@ -794,9 +798,9 @@ api.MapPost("/customers/{customerId:guid}/exports/{exportJobId:guid}/download-ur
     IGovernanceStore governance, ApiCapabilityRegistry capabilities, TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Exports);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.Reader, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Exports);
     var job = await governance.FindExportAsync(customerId, exportJobId, cancellationToken);
     if (job is null) return Results.NotFound();
     if (job.Status != ExportJobStatus.Completed || job.DownloadExpiresAt <= timeProvider.GetUtcNow()) return Results.Conflict();
@@ -812,9 +816,9 @@ api.MapPost("/customers/{customerId:guid}/findings/{findingId:guid}/exceptions",
     TenantAuthorizer authorizer, IGovernanceStore governance, ApiCapabilityRegistry capabilities, TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Exceptions);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.CustomerAdmin, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Exceptions);
     var item = new GovernanceException(Guid.NewGuid(), customerId, findingId, request.Reason, tenant.Subject.ToString(), timeProvider.GetUtcNow(), request.ExpiresAt);
     return Results.Created($"/api/v1/customers/{customerId}/findings/{findingId}/exceptions/{item.ExceptionId}", await governance.AddExceptionAsync(item, cancellationToken));
 }).Produces<GovernanceException>(StatusCodes.Status201Created).ProducesProblem(StatusCodes.Status403Forbidden);
@@ -824,9 +828,9 @@ api.MapPost("/customers/{customerId:guid}/remediation/proposals", async (
     TenantAuthorizer authorizer, IGovernanceStore governance, TrustedRemediationProposalFactory proposalFactory, ApiCapabilityRegistry capabilities,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Remediation);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.CustomerAdmin, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Remediation);
     var proposal = await proposalFactory.CreateAsync(customerId, request, tenant.Subject.ToString(), cancellationToken);
     return Results.Created($"/api/v1/customers/{customerId}/remediation/proposals/{proposal.ProposalId}", await governance.AddProposalAsync(proposal, cancellationToken));
 }).Produces<RemediationProposal>(StatusCodes.Status201Created).ProducesProblem(StatusCodes.Status403Forbidden);
@@ -865,9 +869,9 @@ api.MapPost("/customers/{customerId:guid}/remediation/proposals/{proposalId:guid
     TenantAuthorizer authorizer, IGovernanceStore governance, ApiCapabilityRegistry capabilities, TimeProvider timeProvider,
     CancellationToken cancellationToken) =>
 {
-    capabilities.Require(ApiCapability.Approvals);
     var tenant = await authorizer.AuthorizeAsync(principal.Subject(), customerId, MembershipRole.CustomerAdmin, cancellationToken);
     context.SetAuthorizedTenant(tenant);
+    capabilities.Require(ApiCapability.Approvals);
     var proposal = await governance.FindProposalAsync(customerId, proposalId, cancellationToken);
     if (proposal is null) return Results.NotFound();
     if (request.Approved) proposal.Approve(tenant.Subject.ToString(), timeProvider.GetUtcNow(), request.LatestSnapshotId);

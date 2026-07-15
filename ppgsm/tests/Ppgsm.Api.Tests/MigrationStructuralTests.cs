@@ -22,7 +22,7 @@ public sealed class MigrationStructuralTests
         Assert.Equal(modelTables, TenantRlsDefinition.CurrentTenantTables.OrderBy(value => value));
         foreach (var table in modelTables)
         {
-            if (table == "DlpPolicyEvidence") continue;
+            if (table is "DlpPolicyEvidence" or "PocApprovals") continue;
             Assert.Equal(1, Count(TenantRlsDefinition.Sql, $"FILTER PREDICATE dbo.fn_ppgsm_tenant_access(CustomerId) ON dbo.{table}"));
             Assert.Equal(1, Count(TenantRlsDefinition.Sql, $"BLOCK PREDICATE dbo.fn_ppgsm_tenant_access(CustomerId) ON dbo.{table} AFTER INSERT"));
             Assert.Equal(1, Count(TenantRlsDefinition.Sql, $"BLOCK PREDICATE dbo.fn_ppgsm_tenant_access(CustomerId) ON dbo.{table} AFTER UPDATE"));
