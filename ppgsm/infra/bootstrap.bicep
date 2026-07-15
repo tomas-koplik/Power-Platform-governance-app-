@@ -42,6 +42,7 @@ module registry 'modules/registry.bicep' = {
     tags: tags
     apiPrincipalId: identities.outputs.apiPrincipalId
     workerPrincipalId: identities.outputs.workerPrincipalId
+    webPrincipalId: identities.outputs.webPrincipalId
     migrationPrincipalId: identities.outputs.migrationPrincipalId
   }
 }

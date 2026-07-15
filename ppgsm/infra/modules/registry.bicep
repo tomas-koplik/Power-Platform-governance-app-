@@ -5,8 +5,6 @@ param apiPrincipalId string
 param workerPrincipalId string
 param migrationPrincipalId string
 param webPrincipalId string
-param certificatePrincipalId string
-param apiRawEvidenceRoleId string
 
 var registryName = take(replace('${namePrefix}acr${uniqueString(resourceGroup().id)}', '-', ''), 50)
 var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')

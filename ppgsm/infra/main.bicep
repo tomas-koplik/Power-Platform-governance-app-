@@ -199,8 +199,6 @@ module registry 'modules/registry.bicep' = {
     workerPrincipalId: identities.outputs.workerPrincipalId
     webPrincipalId: identities.outputs.webPrincipalId
     migrationPrincipalId: identities.outputs.migrationPrincipalId
-    certificatePrincipalId: identities.outputs.certificatePrincipalId
-    apiRawEvidenceRoleId: apiRawEvidenceRole.id
   }
 }
 
@@ -217,6 +215,8 @@ module data 'modules/data.bicep' = {
     apiPrincipalId: identities.outputs.apiPrincipalId
     workerPrincipalId: identities.outputs.workerPrincipalId
     migrationPrincipalId: identities.outputs.migrationPrincipalId
+    certificatePrincipalId: identities.outputs.certificatePrincipalId
+    apiRawEvidenceRoleId: apiRawEvidenceRole.id
     sqlEntraAdminLogin: sqlEntraAdminLogin
     sqlEntraAdminObjectId: sqlEntraAdminObjectId
     tenantId: tenant().tenantId
