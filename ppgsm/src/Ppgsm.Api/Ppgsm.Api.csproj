@@ -10,7 +10,7 @@
     <ProjectReference Include="..\Ppgsm.Core\Ppgsm.Core.csproj" />
     <ProjectReference Include="..\Ppgsm.Data\Ppgsm.Data.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.11" />
-    <PackageReference Include="Microsoft.Identity.Web" Version="3.5.0" />
+    <PackageReference Include="Microsoft.Identity.Web" Version="3.15.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>
   <ItemGroup>

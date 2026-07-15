@@ -131,5 +131,5 @@ class MockAdapter implements GovernanceAdapter {
 }
 
 const adapterMode = runtimeConfig.dataAdapter ?? import.meta.env.VITE_DATA_ADAPTER;
-if (import.meta.env.PROD && adapterMode === "mock") throw new Error("Mock data adapter is prohibited in production.");
+if (import.meta.env.PROD && import.meta.env.MODE !== "demo" && adapterMode === "mock") throw new Error("Mock data adapter is prohibited in production.");
 export const adapter: GovernanceAdapter & { capabilities: ActionCapabilities } = adapterMode === "mock" ? new MockAdapter() : new LiveAdapter();
