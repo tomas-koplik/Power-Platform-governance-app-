@@ -15,3 +15,6 @@
 
 # macOS
 .DS_Store
+
+# Third-party engagement material stays local; never publish it with the app
+Engagements/
