@@ -18,7 +18,7 @@ export function readBrowserAuthConfig(): BrowserAuthConfig {
   const clientId = runtimeConfig.entraClientId ?? import.meta.env.VITE_ENTRA_CLIENT_ID;
   const apiScope = runtimeConfig.apiScope ?? import.meta.env.VITE_API_SCOPE;
   const missing = [!clientId && "VITE_ENTRA_CLIENT_ID", !apiScope && "VITE_API_SCOPE"].filter(Boolean);
-  if (missing.length) throw new Error(`Live mode requires Entra configuration: ${missing.join(", ")}.`);
+  if (!clientId || !apiScope) throw new Error(`Live mode requires Entra configuration: ${missing.join(", ")}.`);
   return {
     clientId,
     apiScope,

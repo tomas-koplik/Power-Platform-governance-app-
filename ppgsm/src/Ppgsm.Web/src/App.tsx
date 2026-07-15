@@ -184,7 +184,7 @@ function ConnectorGroup({ title, items }: { title: string; items: string[] }) { 
 function Comparison({ data }: { data: WorkspaceData }) {
   const customer = data.customers[0]; const [currentId, setCurrentId] = useState(data.snapshots[0]?.snapshotId ?? ""); const current = data.snapshots.find((item) => item.snapshotId === currentId); const prior = data.snapshots.find((item) => item.snapshotId !== currentId);
   const [includePii, setIncludePii] = useState(false);
-  const comparison = useQuery({ queryKey: ["comparison", customer?.customerId, prior?.snapshotId, current?.snapshotId], queryFn: () => adapter.compareSnapshots(customer.customerId, prior.snapshotId, current.snapshotId), enabled: !!customer && !!current && !!prior && data.capabilities.compare });
+  const comparison = useQuery({ queryKey: ["comparison", customer?.customerId, prior?.snapshotId, current?.snapshotId], queryFn: () => adapter.compareSnapshots(customer.customerId, prior!.snapshotId, current!.snapshotId), enabled: !!customer && !!current && !!prior && data.capabilities.compare });
   const exportMutation = useMutation({ mutationFn: () => adapter.createExport(customer.customerId, { snapshotId: current!.snapshotId, format: "Json", includePii }) });
   const downloadMutation = useMutation({ mutationFn: () => adapter.downloadExport(customer.customerId, job!.exportJobId) });
   const exportJob = useQuery({ queryKey: ["export", customer?.customerId, exportMutation.data?.exportJobId], queryFn: () => adapter.getExport(customer.customerId, exportMutation.data!.exportJobId), enabled: !!exportMutation.data, refetchInterval: (query) => query.state.data?.status === "Queued" || query.state.data?.status === "Running" ? 2000 : false });
